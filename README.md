@@ -1,0 +1,1 @@
+# Aleator: a periodic-system core for Monte Carlo, molecular dynamics, and porous-material geometry analysis

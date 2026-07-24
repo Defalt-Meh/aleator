@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "aleator",
+  "version": "0.1.0",
+  "description": "Aleator: a molecular simulation engine (Monte Carlo, molecular dynamics, and porous-material geometry analysis) on a shared periodic-system core.",
+  "homepage": "https://github.com/Defalt-Meh/aleator",
+  "license": "BSD-3-Clause",
+  "dependencies": [
+    "highway",
+    "catch2",
+    "benchmark",
+    "tomlplusplus",
+    "spdlog",
+    {
+      "name": "nanobind",
+      "default-features": false
+    }
+  ]
+}

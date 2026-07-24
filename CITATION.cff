@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use Aleator in published work, please cite it as below."
+title: "Aleator: a periodic-system core for Monte Carlo, molecular dynamics, and porous-material geometry analysis"
+type: software
+authors:
+  - name: "Aleator contributors"
+repository-code: "https://github.com/Defalt-Meh/aleator"
+license: BSD-3-Clause
+version: 0.1.0
+date-released: 2026-07-24
