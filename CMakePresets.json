@@ -1,0 +1,93 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "displayName": "Development (Debug, warnings-as-errors)",
+      "description": "Debug build with full diagnostics and -Werror. Default day-to-day preset.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ALEATOR_BUILD_TESTS": "ON",
+        "ALEATOR_BUILD_BENCHMARKS": "ON",
+        "ALEATOR_BUILD_PYTHON": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "Optimized build for distribution. No -march=native, portable across the CMAKE_CXX_STANDARD target ISA baseline; hot kernels dispatch at runtime via Highway.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ALEATOR_BUILD_TESTS": "ON",
+        "ALEATOR_BUILD_BENCHMARKS": "OFF",
+        "ALEATOR_BUILD_PYTHON": "ON"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "ASan + UBSan",
+      "description": "Debug build instrumented with AddressSanitizer and UndefinedBehaviorSanitizer. GCC/Clang only.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ALEATOR_ENABLE_ASAN": "ON",
+        "ALEATOR_ENABLE_UBSAN": "ON",
+        "ALEATOR_BUILD_TESTS": "ON",
+        "ALEATOR_BUILD_BENCHMARKS": "OFF",
+        "ALEATOR_BUILD_PYTHON": "OFF"
+      }
+    },
+    {
+      "name": "bench",
+      "displayName": "Benchmarks (Release, -march=native, LOCAL ONLY)",
+      "description": "Release build with -march=native scoped to the benchmarks/ target only, for the sharpest possible local performance numbers. NEVER used for a wheel, release binary, or CI artifact — see CLAUDE.md #2.3.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ALEATOR_BUILD_TESTS": "OFF",
+        "ALEATOR_BUILD_BENCHMARKS": "ON",
+        "ALEATOR_BUILD_PYTHON": "OFF",
+        "ALEATOR_BENCH_NATIVE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "bench", "configurePreset": "bench" }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    }
+  ]
+}

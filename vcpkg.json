@@ -10,10 +10,20 @@
     "catch2",
     "benchmark",
     "tomlplusplus",
-    "spdlog",
-    {
-      "name": "nanobind",
-      "default-features": false
+    "spdlog"
+  ],
+  "default-features": [
+    "python"
+  ],
+  "features": {
+    "python": {
+      "description": "nanobind, for the standalone CMake build's Python extension target. Deliberately NOT used by the scikit-build-core wheel build (see pyproject.toml): vcpkg's nanobind port pulls in vcpkg's own bundled Python 3, whose CMake wrapper overrides find_package(Python) process-wide — fine when nothing needs to match a specific host interpreter, wrong when building an installable wheel, which must be built against the exact Python ABI running pip. The wheel build fetches nanobind from PyPI instead and disables this feature via -DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON.",
+      "dependencies": [
+        {
+          "name": "nanobind",
+          "default-features": false
+        }
+      ]
     }
-  ]
+  }
 }

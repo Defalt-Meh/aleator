@@ -1,0 +1,86 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "cmake>=3.25", "ninja", "nanobind>=2.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "aleator"
+version = "0.1.0"
+description = "Monte Carlo, molecular dynamics, and porous-material geometry analysis on a shared periodic-system core. Scaffolding only — no physics is implemented yet."
+readme = "README.md"
+license = { text = "BSD-3-Clause" }
+requires-python = ">=3.9"
+authors = [{ name = "Aleator contributors" }]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+[project.urls]
+Homepage = "https://github.com/Defalt-Meh/aleator"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["python/aleator"]
+sdist.include = [
+    "src",
+    "cmake",
+    "CMakeLists.txt",
+    "vcpkg.json",
+    "vcpkg-configuration.json",
+]
+
+[tool.scikit-build.cmake.define]
+ALEATOR_BUILD_PYTHON = "ON"
+ALEATOR_BUILD_TESTS = "OFF"
+ALEATOR_BUILD_BENCHMARKS = "OFF"
+ALEATOR_ENABLE_MPI = "OFF"
+# Skips vcpkg's "python" manifest feature (nanobind + vcpkg's own bundled
+# Python 3), which would otherwise hijack find_package(Python) project-wide
+# via its CMake wrapper and point it at vcpkg's Python instead of the one
+# actually running this build. src/bindings/CMakeLists.txt fetches nanobind
+# from PyPI instead (see [build-system] requires above), which has no such
+# conflict and is guaranteed to match the host interpreter's ABI.
+VCPKG_MANIFEST_NO_DEFAULT_FEATURES = "ON"
+
+# Requires a vcpkg checkout with dependencies resolvable from vcpkg.json.
+# Point CMake at it (no default is baked in here, since VCPKG_ROOT is
+# machine-specific):
+#
+#   CMAKE_ARGS="-DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+#     pip install -e .
+
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
+skip = ["*-musllinux*", "*-manylinux_i686", "*-win32", "pp*"]
+build-verbosity = 1
+before-all = "bash scripts/bootstrap_vcpkg.sh"
+test-requires = "pytest"
+test-command = "pytest {package}/python/tests"
+
+[tool.cibuildwheel.environment]
+VCPKG_ROOT = "$(pwd)/.vcpkg-cibw"
+CMAKE_ARGS = "-DCMAKE_TOOLCHAIN_FILE=$(pwd)/.vcpkg-cibw/scripts/buildsystems/vcpkg.cmake"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+before-all = [
+    "(command -v yum && yum install -y zip unzip) || (command -v apt-get && apt-get update && apt-get install -y zip unzip) || true",
+    "bash scripts/bootstrap_vcpkg.sh",
+]
+
+[tool.cibuildwheel.macos]
+archs = ["x86_64", "arm64"]
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
+before-build = "pip install delvewheel"
+repair-wheel-command = "delvewheel repair -w {dest_dir} {wheel}"
+

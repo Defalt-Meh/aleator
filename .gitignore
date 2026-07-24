@@ -71,3 +71,17 @@ Testing/
 # artifacts
 aleator.md
 claude.md
+
+# vcpkg bootstrapped for cibuildwheel / CI (scripts/bootstrap_vcpkg.sh)
+.vcpkg-cibw/
+
+# Python packaging
+__pycache__/
+*.egg-info/
+dist/
+wheelhouse/
+.pytest_cache/
+.venv/
+
+# macOS
+.DS_Store

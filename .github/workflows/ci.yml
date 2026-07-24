@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-gcc13
+            os: ubuntu-24.04
+            cc: gcc-13
+            cxx: g++-13
+          - name: ubuntu-clang16
+            os: ubuntu-24.04
+            cc: clang-16
+            cxx: clang++-16
+          - name: macos-clang
+            os: macos-14
+            cc: clang
+            cxx: clang++
+          - name: windows-msvc
+            os: windows-2022
+            cc: cl
+            cxx: cl
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install compiler (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.cc }} ${{ matrix.cxx == 'g++-13' && 'g++-13' || 'clang-16' }} ninja-build autoconf autoconf-archive automake libtool
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Install Ninja (Windows)
+        uses: seanmiddleditch/gha-setup-ninja@master
+        if: runner.os == 'Windows'
+
+      - name: Set up MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Bootstrap vcpkg
+        shell: bash
+        run: bash scripts/bootstrap_vcpkg.sh
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/.vcpkg-cibw
+
+      - name: Configure (dev preset)
+        shell: bash
+        run: cmake --preset dev
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/.vcpkg-cibw
+
+      - name: Build
+        run: cmake --build --preset dev
+
+      - name: Test
+        run: ctest --preset dev
+
+      - name: Upload benchmark baseline artifact
+        if: matrix.name == 'ubuntu-gcc13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmarks/results/
+          if-no-files-found: ignore
+
+  sanitizers:
+    name: asan-ubsan (Linux, Clang)
+    runs-on: ubuntu-24.04
+    env:
+      CC: clang-16
+      CXX: clang++-16
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-16 ninja-build autoconf autoconf-archive automake libtool
+
+      - name: Bootstrap vcpkg
+        run: bash scripts/bootstrap_vcpkg.sh
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/.vcpkg-cibw
+
+      - name: Configure (asan preset)
+        run: cmake --preset asan
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/.vcpkg-cibw
+
+      - name: Build
+        run: cmake --build --preset asan
+
+      - name: Test under ASan + UBSan
+        run: ctest --preset asan
+
+  wheels:
+    name: wheels (${{ matrix.os }})
+    needs: build-test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
