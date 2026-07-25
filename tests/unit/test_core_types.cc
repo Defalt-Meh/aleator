@@ -47,16 +47,6 @@ TEST_CASE("Lattice stores the general triclinic matrix, not orthogonal lengths",
     REQUIRE(std::abs(lattice.volume() - 720.0) < 1e-9);
 }
 
-TEST_CASE("Lattice PBC operations are declared but not yet implemented", "[unit][core]") {
-    const aleator::core::Lattice lattice;
-    REQUIRE_THROWS_AS(lattice.fractionalToCartesian({0.5, 0.5, 0.5}),
-                       aleator::NotImplemented);
-    REQUIRE_THROWS_AS(lattice.cartesianToFractional({0.0, 0.0, 0.0}), aleator::NotImplemented);
-    REQUIRE_THROWS_AS(lattice.minimumImageDisplacement({0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}),
-                       aleator::NotImplemented);
-    REQUIRE_THROWS_AS(lattice.wrapIntoCell({0.0, 0.0, 0.0}), aleator::NotImplemented);
-}
-
 TEST_CASE("Philox4x32Rng is declared but not yet implemented", "[unit][core]") {
     aleator::core::Philox4x32Rng rng;
     REQUIRE_THROWS_AS(rng.seed(1, 0), aleator::NotImplemented);

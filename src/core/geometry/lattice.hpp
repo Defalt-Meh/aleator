@@ -13,15 +13,11 @@ namespace aleator::core {
 /// components in columns. An orthorhombic cell is simply one where the
 /// off-diagonal entries happen to be zero; no code path may assume that.
 ///
-/// `Lattice` itself only *holds* the cell. Every operation that is a known
-/// failure mode if done carelessly (fractional/cartesian conversion, the
-/// periodic-boundary minimum-image displacement, wrapping into the
-/// reference cell) is declared here as an entry point but not implemented —
-/// see CLAUDE.md #10 ("Minimum image convention assuming orthorhombic —
-/// silently wrong for triclinic MOFs") and #4 (Ewald / validation anchors).
-/// Those are physics-adjacent, correctness-critical algorithms that get
-/// their own validation tests (triclinic + cutoff > L/2 rejection) before
-/// they are implemented, not stubbed in during scaffolding.
+/// All PBC-adjacent operations here are validated against a brute-force
+/// ground truth over triclinic and deliberately pathological (e.g.
+/// 60/60/60 degree rhombohedral) cells in tests/validation/ — see CLAUDE.md
+/// #10 ("Minimum image convention assuming orthorhombic — silently wrong
+/// for triclinic MOFs").
 class Lattice {
 public:
     Lattice() = default;
@@ -45,27 +41,49 @@ public:
     }
 
     /// Converts fractional coordinates (each in, conventionally, [0,1)) to
-    /// Cartesian Å. Declared only — see class-level comment. Throws
-    /// NotImplemented.
+    /// Cartesian Å: cartesian = fractional * matrix (row-vector convention).
     [[nodiscard]] std::array<double, 3> fractionalToCartesian(
         const std::array<double, 3>& fractional) const;
 
-    /// Converts Cartesian Å coordinates to fractional coordinates. Declared
-    /// only — see class-level comment. Throws NotImplemented.
+    /// Converts Cartesian Å coordinates to fractional coordinates, via the
+    /// reciprocal-vector formula f_i = cartesian . (a_j x a_k) / volume.
+    /// Throws std::invalid_argument if the cell is degenerate (volume ~ 0).
     [[nodiscard]] std::array<double, 3> cartesianToFractional(
         const std::array<double, 3>& cartesian) const;
 
-    /// Minimum-image displacement vector (Å) from point `a` to point `b`
-    /// under this cell's periodic boundary conditions. Must eventually be
-    /// correct for triclinic cells and must reject cutoff > L/2 configs at
-    /// the caller's input-validation layer, not silently double-count
-    /// (CLAUDE.md #10). Declared only. Throws NotImplemented.
+    /// Minimum-image displacement vector (Å) from point `a` to the nearest
+    /// periodic image of `b` under this cell's periodic boundary
+    /// conditions. Correct for arbitrary triclinic cells: internally
+    /// searches a neighborhood of candidate lattice translations around a
+    /// Gauss-reduced basis rather than relying on naive independent
+    /// fractional-coordinate rounding, which is wrong for strongly skewed
+    /// cells (CLAUDE.md #10). Throws std::invalid_argument if the cell is
+    /// degenerate.
     [[nodiscard]] std::array<double, 3> minimumImageDisplacement(
         const std::array<double, 3>& a, const std::array<double, 3>& b) const;
 
-    /// Wraps a Cartesian point into the reference cell [0,1)^3 in fractional
-    /// coordinates. Declared only. Throws NotImplemented.
+    /// Wraps a Cartesian point into the reference cell (fractional
+    /// coordinates in [0,1)^3), returned in Cartesian Å.
     [[nodiscard]] std::array<double, 3> wrapIntoCell(const std::array<double, 3>& cartesian) const;
+
+    /// Perpendicular width (Å) along lattice direction `axis` (0, 1, or 2):
+    /// the distance between the two faces of the cell spanned by the other
+    /// two lattice vectors, h_axis = volume / |a_j x a_k|. This is the
+    /// quantity a minimum-image cutoff must not exceed half of.
+    [[nodiscard]] double perpendicularWidth(int axis) const;
+
+    /// Throws std::invalid_argument, naming the offending lattice
+    /// direction, if `cutoff` exceeds perpendicularWidth(axis)/2 for any
+    /// axis — that configuration lets minimum image double-count the same
+    /// neighbor through two different periodic images (CLAUDE.md #10).
+    void validateCutoff(double cutoff) const;
+
+    /// Returns an equivalent lattice (same periodicity and volume) whose
+    /// basis vectors have been Gauss-reduced: each vector is the shortest
+    /// available representative of its coset, which is what makes a small,
+    /// bounded neighborhood search sufficient for minimum image on
+    /// otherwise badly-conditioned (strongly skewed) cells.
+    [[nodiscard]] Lattice reduced() const;
 
 private:
     std::array<std::array<double, 3>, 3> matrix_{};

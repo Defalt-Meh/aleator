@@ -1,5 +1,6 @@
 add_executable(aleator_validation_tests
     test_ewald_not_faked.cc
+    test_lattice_minimum_image.cc
 )
 aleator_configure_target(aleator_validation_tests)
 
@@ -7,6 +8,7 @@ target_link_libraries(aleator_validation_tests
     PRIVATE
         Catch2::Catch2WithMain
         aleator::core::common
+        aleator::core::geometry
         aleator::core::neighbor
         aleator::forcefield::electrostatics
 )

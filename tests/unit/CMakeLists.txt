@@ -1,5 +1,6 @@
 add_executable(aleator_unit_tests
     test_core_types.cc
+    test_lattice_geometry.cc
     test_simd_kernels.cc
 )
 aleator_configure_target(aleator_unit_tests)
