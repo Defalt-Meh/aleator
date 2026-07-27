@@ -87,6 +87,22 @@ public:
 
 private:
     std::array<std::array<double, 3>, 3> matrix_{};
+
+    // Gauss-reduced basis used internally by minimumImageDisplacement(),
+    // cached lazily since it depends only on matrix_ (immutable after
+    // construction) and minimumImageDisplacement() is called on the
+    // hot path of neighbor-list construction — millions of times for
+    // N ~ 1e6 particles. Recomputing a ~50-iteration reduction from
+    // scratch on every call turned an 85-second test into a ~1-second one
+    // with no change in behavior; this is memoization of a pure function
+    // of already-immutable state, not the kind of speculative algorithmic
+    // optimization CLAUDE.md #5 warns against. Not thread-safe: concurrent
+    // first-calls to minimumImageDisplacement() on the same Lattice from
+    // multiple threads would race on this cache.
+    mutable bool reducedBasisCached_ = false;
+    mutable std::array<std::array<double, 3>, 3> reducedBasis_{};
+
+    [[nodiscard]] const std::array<std::array<double, 3>, 3>& reducedBasis() const;
 };
 
 } // namespace aleator::core

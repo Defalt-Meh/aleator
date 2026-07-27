@@ -1,4 +1,5 @@
 add_executable(aleator_unit_tests
+    test_cell_list.cc
     test_cif_parsing.cc
     test_core_types.cc
     test_lattice_geometry.cc
@@ -13,6 +14,7 @@ target_link_libraries(aleator_unit_tests
         aleator::core::memory
         aleator::core::math
         aleator::core::geometry
+        aleator::core::neighbor
         aleator::io
         hwy::hwy
 )

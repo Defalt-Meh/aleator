@@ -44,7 +44,14 @@ public:
     [[nodiscard]] virtual bool needsRebuild(const ParticleData& particles) const = 0;
 
     /// All pairs (i, j), i < j, with a minimum-image separation at or below
-    /// the cutoff passed to the last build().
+    /// the cutoff passed to the last build() — exact, not merely a
+    /// candidate superset, as long as needsRebuild() is false. (A skin-based
+    /// implementation may internally track a larger cutoff+skin candidate
+    /// set to avoid rebuilding every call, but that is an implementation
+    /// detail: what this method returns is always filtered to the exact
+    /// cutoff. See the concrete class's docs for what "since the last
+    /// build()" means in terms of which ParticleData it reads current
+    /// positions from.)
     [[nodiscard]] virtual const std::vector<NeighborPair>& pairs() const = 0;
 };
 

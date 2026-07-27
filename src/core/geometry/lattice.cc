@@ -102,6 +102,19 @@ std::array<Vec3, 3> greedyReduce(std::array<Vec3, 3> v) {
 
 } // namespace
 
+const std::array<std::array<double, 3>, 3>& Lattice::reducedBasis() const {
+    if (!reducedBasisCached_) {
+        const auto r = greedyReduce(rowsOf(matrix_));
+        reducedBasis_ = {{
+            {r[0][0], r[0][1], r[0][2]},
+            {r[1][0], r[1][1], r[1][2]},
+            {r[2][0], r[2][1], r[2][2]},
+        }};
+        reducedBasisCached_ = true;
+    }
+    return reducedBasis_;
+}
+
 std::array<double, 3> Lattice::fractionalToCartesian(const std::array<double, 3>& fractional) const {
     const auto& m = matrix_;
     return {
@@ -146,11 +159,9 @@ std::array<double, 3> Lattice::minimumImageDisplacement(const std::array<double,
     // periodic images, but makes a small bounded neighborhood search
     // reliable — naively rounding each fractional coordinate of the
     // *unreduced* matrix independently is the classic wrong shortcut for
-    // strongly skewed triclinic cells (CLAUDE.md #10).
-    const auto reducedBasis = greedyReduce(rowsOf(matrix_));
-    const Vec3& r0 = reducedBasis[0];
-    const Vec3& r1 = reducedBasis[1];
-    const Vec3& r2 = reducedBasis[2];
+    // strongly skewed triclinic cells (CLAUDE.md #10). Cached (see
+    // reducedBasis()): this runs on the neighbor-list hot path.
+    const auto [r0, r1, r2] = rowsOf(reducedBasis());
     const double reducedVolume = tripleProduct(r0, r1, r2);
 
     const Vec3 nearest = fractionalOf(d, r0, r1, r2, reducedVolume);
@@ -239,12 +250,7 @@ Lattice Lattice::reduced() const {
     if (std::abs(vol) < kDegenerateVolumeThreshold) {
         throw std::invalid_argument("Lattice::reduced: degenerate lattice (volume ~ 0)");
     }
-    const auto r = greedyReduce(rowsOf(matrix_));
-    return Lattice({{
-        {r[0][0], r[0][1], r[0][2]},
-        {r[1][0], r[1][1], r[1][2]},
-        {r[2][0], r[2][1], r[2][2]},
-    }});
+    return Lattice(reducedBasis());
 }
 
 } // namespace aleator::core

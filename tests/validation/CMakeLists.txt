@@ -2,6 +2,7 @@ add_executable(aleator_validation_tests
     test_cif_real_structures.cc
     test_ewald_not_faked.cc
     test_lattice_minimum_image.cc
+    test_neighbor_list_brute_force.cc
 )
 aleator_configure_target(aleator_validation_tests)
 
