@@ -12,6 +12,4 @@ aleator_configure_target(aleator_forcefield_pairwise)
 target_link_libraries(aleator_forcefield_pairwise
     PUBLIC
         aleator::forcefield::common
-    PRIVATE
-        aleator::core::common
 )

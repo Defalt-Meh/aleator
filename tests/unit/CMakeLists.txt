@@ -3,6 +3,7 @@ add_executable(aleator_unit_tests
     test_cif_parsing.cc
     test_core_types.cc
     test_lattice_geometry.cc
+    test_lennard_jones_mixing.cc
     test_simd_kernels.cc
 )
 aleator_configure_target(aleator_unit_tests)
@@ -15,6 +16,7 @@ target_link_libraries(aleator_unit_tests
         aleator::core::math
         aleator::core::geometry
         aleator::core::neighbor
+        aleator::forcefield::pairwise
         aleator::io
         hwy::hwy
 )
