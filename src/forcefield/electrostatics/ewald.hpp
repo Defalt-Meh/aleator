@@ -1,29 +1,94 @@
 #pragma once
 
+#include <cstddef>
+#include <utility>
+#include <vector>
+
 #include "forcefield/force_field.hpp"
 
 namespace aleator::forcefield {
 
-/// Ewald summation electrostatics: real-space sum + reciprocal-space sum +
-/// self-interaction correction + (if molecules have excluded intramolecular
-/// pairs) exclusion correction + conducting/"tinfoil" boundary term.
+/// Per-term decomposition of the Ewald energy, exposed so validation tests
+/// can compare each physical term (e.g. against NIST SRSW's published
+/// per-term SPC/E water breakdown) individually rather than only the sum —
+/// far more diagnostic than a single total when something is wrong, since a
+/// coefficient bug in one term won't hide behind cancellation with another.
+struct EwaldEnergyBreakdown {
+    double real = 0.0;       // U_real
+    double reciprocal = 0.0; // U_reciprocal
+    double self = 0.0;       // U_self
+    double exclusion = 0.0;  // U_exclusion
+    double surface = 0.0;    // U_surface (0 under tinfoil boundary conditions)
+    [[nodiscard]] double total() const { return real + reciprocal + self + exclusion + surface; }
+};
+
+/// Ewald summation electrostatics for point charges under periodic
+/// boundary conditions:
 ///
-/// CLAUDE.md #4: "Ewald is the highest-risk component in the codebase. It is
-/// easy to write an implementation that is off by the self-interaction
-/// term, the intramolecular exclusion correction, or the surface/tinfoil
-/// boundary term — and such an implementation will produce smooth,
-/// plausible, completely wrong isotherms." This class exists only as the
-/// declared entry point; do not implement any of computeEnergy /
-/// computeForces without first wiring the NaCl rocksalt Madelung constant
-/// (1.747564594633..., 1e-6 relative tolerance) validation test, and do not
-/// consider it done until that test passes — see CLAUDE.md invariant #1.
+///     U = U_real + U_reciprocal + U_self + U_exclusion + U_surface
+///
+/// Every term is implemented explicitly (see ewald.cc — each has its own
+/// clearly-labeled function) and validated first against the NaCl rocksalt
+/// Madelung constant (1.747564594633..., 1e-6 relative —
+/// tests/validation/test_ewald_madelung.cc) before anything else, per
+/// CLAUDE.md invariant #1. CLAUDE.md #4: "Ewald is the highest-risk
+/// component in the codebase... easy to write an implementation that is
+/// off by the self-interaction term, the intramolecular exclusion
+/// correction, or the surface/tinfoil boundary term — and such an
+/// implementation will produce smooth, plausible, completely wrong
+/// isotherms."
+///
+/// Boundary condition: tinfoil (conducting surroundings, relative
+/// permittivity of the surrounding medium -> infinity), the standard
+/// default for condensed-phase simulation. Under tinfoil boundary
+/// conditions U_surface is exactly zero (the polarization charge on a
+/// conductor at infinity exactly cancels the system's net dipole term);
+/// under vacuum boundary conditions (not implemented here) it would be
+/// (2*pi / (3V)) * |sum_i q_i r_i|^2. This is a deliberate, explicit
+/// choice, not an omission — see computeEnergy()'s implementation.
 class Ewald final : public ForceField {
 public:
-    Ewald(double alpha, double realSpaceCutoff, int kMax);
+    /// Coulomb's constant expressed for this codebase's internal units
+    /// (Å length, K = energy/k_B energy, e charge): the energy (in K)
+    /// between two unit charges (in e) 1 Å apart is exactly this value.
+    ///     kCoulomb = e^2 / (4*pi*eps0 * 1 Angstrom * k_B)
+    /// computed from CODATA constants: e = 1.602176634e-19 C (exact, SI
+    /// 2019), k_B = 1.380649e-23 J/K (exact, SI 2019), eps0 =
+    /// 8.8541878128e-12 F/m (CODATA 2018; relative uncertainty ~1.5e-10,
+    /// i.e. exact for any purpose this codebase has). Equivalently,
+    /// e^2/(4*pi*eps0) = 14.399645... eV*Angstrom, a standard tabulated
+    /// constant, converted to Kelvin via 1 eV = 11604.518... K.
+    static constexpr double kCoulombConstant = 167100.9468982874;
 
+    /// `kMax` bounds the reciprocal-lattice index vectors (n0, n1, n2)
+    /// summed over: n0^2 + n1^2 + n2^2 < kMax^2 + 2, a spherical
+    /// (isotropic) truncation in index space, not a per-axis cube — see
+    /// ewald.cc for why (including the empirical justification for the
+    /// strict inequality), and note this is what makes kMax comparable
+    /// across differently-shaped cells.
+    ///
+    /// `exclusions` lists particle index pairs (i, j) — order doesn't
+    /// matter — whose direct Coulomb interaction is excluded (e.g.
+    /// intramolecular pairs already accounted for by a bonded potential).
+    /// Each excluded pair must not also appear as a genuine non-bonded
+    /// pair; behavior is undefined if the same (i, j) is listed twice.
+    Ewald(double alpha, double realSpaceCutoff, int kMax,
+          std::vector<std::pair<std::size_t, std::size_t>> exclusions = {});
+
+    /// Throws std::invalid_argument if the system's net charge is not
+    /// (numerically) zero — the reciprocal-space k=0 term is only
+    /// well-defined (finite) for a neutral system; a uniform neutralizing
+    /// background is not implemented.
     [[nodiscard]] double computeEnergy(const core::ParticleData& particles,
                                         const core::Lattice& lattice,
                                         const core::NeighborList& neighbors) const override;
+
+    /// Same computation as computeEnergy(), with every term exposed
+    /// separately. computeEnergy() is implemented in terms of this
+    /// (returns the .total()) so the two can never disagree.
+    [[nodiscard]] EwaldEnergyBreakdown computeEnergyBreakdown(
+        const core::ParticleData& particles, const core::Lattice& lattice,
+        const core::NeighborList& neighbors) const;
 
     void computeForces(const core::ParticleData& particles, const core::Lattice& lattice,
                         const core::NeighborList& neighbors, Forces& forcesOut) const override;
@@ -31,11 +96,16 @@ public:
     [[nodiscard]] double alpha() const noexcept { return alpha_; }
     [[nodiscard]] double realSpaceCutoff() const noexcept { return realSpaceCutoff_; }
     [[nodiscard]] int kMax() const noexcept { return kMax_; }
+    [[nodiscard]] const std::vector<std::pair<std::size_t, std::size_t>>& exclusions()
+        const noexcept {
+        return exclusions_;
+    }
 
 private:
     double alpha_;
     double realSpaceCutoff_;
     int kMax_;
+    std::vector<std::pair<std::size_t, std::size_t>> exclusions_;
 };
 
 } // namespace aleator::forcefield

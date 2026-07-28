@@ -12,6 +12,4 @@ aleator_configure_target(aleator_forcefield_electrostatics)
 target_link_libraries(aleator_forcefield_electrostatics
     PUBLIC
         aleator::forcefield::common
-    PRIVATE
-        aleator::core::common
 )

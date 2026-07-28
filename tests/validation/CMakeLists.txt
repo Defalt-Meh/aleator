@@ -1,6 +1,9 @@
 add_executable(aleator_validation_tests
     test_cif_real_structures.cc
-    test_ewald_not_faked.cc
+    test_ewald_alpha_independence.cc
+    test_ewald_forces_fd.cc
+    test_ewald_madelung.cc
+    test_ewald_spce_water.cc
     test_lattice_minimum_image.cc
     test_lennard_jones_forces_fd.cc
     test_lennard_jones_nist.cc
