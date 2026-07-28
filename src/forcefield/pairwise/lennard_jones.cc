@@ -155,6 +155,32 @@ void LennardJones::computeForces(const core::ParticleData& particles, const core
     }
 }
 
+double LennardJones::computeParticleEnergy(std::size_t index, const core::ParticleData& particles,
+                                            const core::Lattice& lattice,
+                                            const std::vector<std::size_t>& excludedIndices) const {
+    double energy = 0.0;
+    const auto pi = position(particles, index);
+    for (std::size_t j = 0; j < particles.size(); ++j) {
+        if (j == index) {
+            continue;
+        }
+        bool excluded = false;
+        for (std::size_t ex : excludedIndices) {
+            if (ex == j) {
+                excluded = true;
+                break;
+            }
+        }
+        if (excluded) {
+            continue;
+        }
+        const auto params = mixedParameters(particles.species[index], particles.species[j]);
+        const auto d = lattice.minimumImageDisplacement(pi, position(particles, j));
+        energy += pairEnergy(norm(d), params);
+    }
+    return energy;
+}
+
 namespace {
 
 /// sum_a sum_b N_a * N_b * f(mixedParameters(a, b)), over every ordered

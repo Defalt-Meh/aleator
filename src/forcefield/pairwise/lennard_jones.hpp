@@ -75,6 +75,14 @@ public:
     void computeForces(const core::ParticleData& particles, const core::Lattice& lattice,
                         const core::NeighborList& neighbors, Forces& forcesOut) const override;
 
+    /// Direct O(N) sum of pairEnergy(index, j) over every other particle j
+    /// in `particles` (skipping `excludedIndices`) — see ForceField's doc
+    /// comment for why this bypasses the neighbor list. Used by
+    /// engines/monte_carlo for GCMC trial-move energy differences.
+    [[nodiscard]] double computeParticleEnergy(
+        std::size_t index, const core::ParticleData& particles, const core::Lattice& lattice,
+        const std::vector<std::size_t>& excludedIndices = {}) const override;
+
     /// Instantaneous pairwise virial W = -sum_{i<j} r_ij * dV/dr|_{r_ij}
     /// over `neighbors.pairs()` (same sign/definition NIST's reference
     /// table uses for W_pair). Related to the configurational pressure

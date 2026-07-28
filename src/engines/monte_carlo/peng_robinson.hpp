@@ -1,0 +1,90 @@
+#pragma once
+
+namespace aleator::engines {
+
+/// Pure-substance critical properties needed by the Peng-Robinson EOS.
+/// Methane's values (CODATA/NIST-consistent, cross-checked against the
+/// original Peng & Robinson (1976) parameterization): critical temperature
+/// 190.6 K, critical pressure 4.599 MPa, acentric factor 0.011.
+struct PengRobinsonSubstance {
+    double criticalTemperatureKelvin;
+    double criticalPressurePascal;
+    double acentricFactor;
+};
+
+inline constexpr PengRobinsonSubstance kMethane{190.6, 4.599e6, 0.011};
+
+/// Peng-Robinson (1976) cubic equation of state for a pure substance:
+///   P = RT/(V-b) - a*alpha(T) / (V^2 + 2bV - b^2)
+/// used here for one purpose: converting an external gas-phase pressure
+/// into the fugacity that appears in the GCMC insertion/deletion acceptance
+/// criteria (engines/monte_carlo/gcmc_acceptance.hpp) — methane at the
+/// pressures/temperatures relevant to adsorption isotherms deviates
+/// non-negligibly from ideal-gas behavior, and using fugacity rather than
+/// raw pressure there is what keeps the chemical-potential term physically
+/// correct.
+///
+/// a = 0.45724 * R^2 * Tc^2 / Pc, b = 0.07780 * R * Tc / Pc, kappa =
+/// 0.37464 + 1.54226*omega - 0.26992*omega^2, alpha(T) = (1 + kappa*(1 -
+/// sqrt(T/Tc)))^2 — the coefficients 0.45724/0.07780/0.37464/1.54226/
+/// 0.26992 are Peng & Robinson's own published constants (Peng, D.Y.;
+/// Robinson, D.B. "A New Two-Constant Equation of State." Ind. Eng. Chem.
+/// Fundam. 1976, 15 (1), 59-64), not re-derived or invented here.
+///
+/// All quantities SI: T in K, P in Pa, molar volume in m^3/mol. Internal
+/// only to this class — the GCMC engine converts the resulting fugacity
+/// (Pa) to this codebase's internal K/Angstrom^3 energy-density convention
+/// at the point of use.
+class PengRobinson {
+public:
+    explicit PengRobinson(PengRobinsonSubstance substance);
+
+    /// Molar gas constant, R = N_A * k_B (SI 2019 exact via the exact
+    /// Avogadro and Boltzmann constants): 8.31446261815324 J/(mol*K).
+    static constexpr double kGasConstant = 8.31446261815324;
+
+    /// Compressibility factor Z = PV/(RT) for the vapor/gas-phase root of
+    /// the PR cubic, found by Newton-Raphson from the ideal-gas starting
+    /// point Z=1. Correct for the supercritical/gas states this codebase's
+    /// GCMC use targets (methane at typical adsorption-isotherm conditions,
+    /// T > Tc); throws std::runtime_error if Newton-Raphson fails to
+    /// converge rather than returning a plausible-looking wrong root.
+    [[nodiscard]] double compressibilityFactor(double temperatureKelvin,
+                                                double pressurePascal) const;
+
+    /// Fugacity coefficient phi = f/P (dimensionless), from the standard
+    /// closed-form PR result:
+    ///   ln(phi) = Z - 1 - ln(Z - B) -
+    ///             (A / (2*sqrt(2)*B)) * ln[(Z + (1+sqrt2)B) / (Z + (1-sqrt2)B)]
+    /// with A = a*alpha(T)*P/(R^2 T^2), B = b*P/(R T).
+    [[nodiscard]] double fugacityCoefficient(double temperatureKelvin, double pressurePascal) const;
+
+    /// f = phi * P, in Pa.
+    [[nodiscard]] double fugacityPascal(double temperatureKelvin, double pressurePascal) const;
+
+    /// P(T, V) directly from the EOS (not through the cubic solver) —
+    /// exposed for validating that a/b/alpha(T) genuinely reproduce a
+    /// critical point at (Tc, Pc): dP/dV and d^2P/dV^2 must both vanish
+    /// there (tests/validation/test_peng_robinson.cc checks this via finite
+    /// difference, independent of compressibilityFactor()'s Newton solve).
+    [[nodiscard]] double pressurePascal(double temperatureKelvin, double molarVolumeM3PerMol) const;
+
+    /// The EOS covolume parameter b (m^3/mol), exposed for testing: at
+    /// T=Tc, P=Pc the dimensionless B = b*Pc/(R*Tc) is EXACTLY 0.07780 by
+    /// construction (b is defined as 0.07780*R*Tc/Pc), which combined with
+    /// alpha(Tc)=1 makes the critical Z a closed-form root of the cubic
+    /// (Z - Zc)^3 = 0 with Zc = (1-B_c)/3 — letting the critical-point
+    /// self-consistency test check dP/dV=d^2P/dV^2=0 there directly,
+    /// without going through compressibilityFactor()'s Newton solve (which
+    /// is numerically ill-conditioned exactly at a triple root, since f'
+    /// vanishes there too).
+    [[nodiscard]] double bParameter() const noexcept { return b_; }
+
+private:
+    PengRobinsonSubstance substance_;
+    double a_;
+    double b_;
+    double kappa_;
+};
+
+} // namespace aleator::engines

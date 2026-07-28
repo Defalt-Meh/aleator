@@ -4,7 +4,12 @@ add_executable(aleator_validation_tests
     test_ewald_forces_fd.cc
     test_ewald_madelung.cc
     test_ewald_spce_water.cc
+    test_gcmc_detailed_balance.cc
+    test_gcmc_ch4_irmof1_isotherm.cc
+    test_gcmc_widom_henry.cc
     test_lattice_minimum_image.cc
+    test_peng_robinson.cc
+    test_philox_random123_vectors.cc
     test_lennard_jones_forces_fd.cc
     test_lennard_jones_nist.cc
     test_lennard_jones_tail_correction.cc
@@ -29,6 +34,8 @@ target_link_libraries(aleator_validation_tests
         aleator::core::geometry
         aleator::core::neighbor
         aleator::core::memory
+        aleator::core::math
+        aleator::engines::monte_carlo
         aleator::forcefield::electrostatics
         aleator::forcefield::pairwise
         aleator::io

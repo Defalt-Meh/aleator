@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <vector>
 
+#include "core/exceptions.hpp"
 #include "core/geometry/lattice.hpp"
 #include "core/math/particle_data.hpp"
 #include "core/memory/aligned_allocator.hpp"
@@ -41,6 +43,37 @@ public:
     /// caller must have sized to particles.size() beforehand).
     virtual void computeForces(const core::ParticleData& particles, const core::Lattice& lattice,
                                 const core::NeighborList& neighbors, Forces& forcesOut) const = 0;
+
+    /// Energy (K) of the interaction between particle `index` and every
+    /// other particle in `particles`, skipping any index listed in
+    /// `excludedIndices` (e.g. the other sites of the same rigid molecule
+    /// as `index`, whose fixed-geometry intramolecular energy is a
+    /// constant that must never enter a Monte Carlo energy difference).
+    /// Deliberately independent of any NeighborList: engines/monte_carlo
+    /// needs this for single-trial-molecule insertion/deletion/translation/
+    /// rotation moves, where only one particle (or a handful, for a
+    /// multi-site molecule) changes at a time and a full neighbor-list
+    /// rebuild every trial would be wasted work for no benefit at the
+    /// particle counts GCMC targets — a direct O(N) scan against every
+    /// other particle is both simpler and correct, matching CLAUDE.md's
+    /// performance discipline (correctness first, optimize only where a
+    /// profiler points).
+    ///
+    /// Not implemented by every ForceField (e.g. Ewald's reciprocal-space
+    /// term is a global sum over all particles' structure factor and isn't
+    /// decomposable into a per-particle contribution without incremental
+    /// structure-factor bookkeeping that doesn't exist yet) — the default
+    /// here throws NotImplemented rather than silently returning 0
+    /// (CLAUDE.md invariant #7).
+    [[nodiscard]] virtual double computeParticleEnergy(
+        std::size_t index, const core::ParticleData& particles, const core::Lattice& lattice,
+        const std::vector<std::size_t>& excludedIndices = {}) const {
+        (void)index;
+        (void)particles;
+        (void)lattice;
+        (void)excludedIndices;
+        throw aleator::NotImplemented("ForceField::computeParticleEnergy");
+    }
 };
 
 } // namespace aleator::forcefield

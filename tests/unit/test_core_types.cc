@@ -47,12 +47,9 @@ TEST_CASE("Lattice stores the general triclinic matrix, not orthogonal lengths",
     REQUIRE(std::abs(lattice.volume() - 720.0) < 1e-9);
 }
 
-TEST_CASE("Philox4x32Rng is declared but not yet implemented", "[unit][core]") {
-    aleator::core::Philox4x32Rng rng;
-    REQUIRE_THROWS_AS(rng.seed(1, 0), aleator::NotImplemented);
-    REQUIRE_THROWS_AS(rng.nextU64(), aleator::NotImplemented);
-    REQUIRE_THROWS_AS(rng.nextUniform(), aleator::NotImplemented);
-}
+// Philox4x32Rng is now implemented for real; see
+// tests/validation/test_philox_random123_vectors.cc for the KAT-vector
+// gate this milestone's session requires (CLAUDE.md invariant #1).
 
 TEST_CASE("AlignedAllocator returns memory aligned to the requested boundary", "[unit][core]") {
     aleator::core::AlignedAllocator<double, 64> allocator;

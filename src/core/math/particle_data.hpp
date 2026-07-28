@@ -66,6 +66,36 @@ struct ParticleData {
         species.push_back(pspecies);
         return x.size() - 1;
     }
+
+    /// Overwrites particle `dest`'s fields with particle `src`'s. Used by
+    /// GCMC deletion (engines/monte_carlo) to implement O(1) removal:
+    /// copy the last particle into the removed slot, then popBack().
+    void copyParticle(std::size_t dest, std::size_t src) {
+        x[dest] = x[src];
+        y[dest] = y[src];
+        z[dest] = z[src];
+        vx[dest] = vx[src];
+        vy[dest] = vy[src];
+        vz[dest] = vz[src];
+        mass[dest] = mass[src];
+        charge[dest] = charge[src];
+        species[dest] = species[src];
+    }
+
+    /// Drops the last particle. Paired with copyParticle() for O(1)
+    /// swap-and-pop removal by index (order of remaining particles is not
+    /// preserved).
+    void popBack() {
+        x.pop_back();
+        y.pop_back();
+        z.pop_back();
+        vx.pop_back();
+        vy.pop_back();
+        vz.pop_back();
+        mass.pop_back();
+        charge.pop_back();
+        species.pop_back();
+    }
 };
 
 } // namespace aleator::core
