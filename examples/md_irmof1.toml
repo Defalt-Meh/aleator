@@ -1,0 +1,15 @@
+# Molecular dynamics on IRMOF-1's framework atoms.
+#
+# engines/dynamics is not implemented yet in this build (see README.md) --
+# this config is real and fully valid, and `aleator md run` will load and
+# validate it, and the real structure file, completely; running it
+# (without --dry-run) will surface a clean NotImplemented message and exit
+# code 2 rather than doing nothing silently or crashing.
+
+[run]
+name = "irmof1-md-smoke-test"
+
+[md]
+structure_file = "IRMOF-1.cif"
+timestep_ps = 0.001
+num_steps = 1000

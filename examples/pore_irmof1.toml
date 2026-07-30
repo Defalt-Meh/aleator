@@ -1,0 +1,15 @@
+# Pore-geometry analysis of IRMOF-1.
+#
+# engines/geometry_analysis is not implemented yet in this build (see
+# README.md) -- this config is real and fully valid, and `aleator pore
+# analyze` will load and validate it, and the real structure file,
+# completely; running it (without --dry-run) will surface a clean
+# NotImplemented message and exit code 2 rather than doing nothing
+# silently or crashing.
+
+[run]
+name = "irmof1-pore-geometry"
+
+[pore]
+framework_cif = "IRMOF-1.cif"
+probe_radius_angstrom = 1.4

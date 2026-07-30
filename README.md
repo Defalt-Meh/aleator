@@ -56,10 +56,12 @@ but calling them throws `NotImplemented` rather than doing anything:
   against Zeo++'s published values for LTA, MFI, and FAU.
 - **Structure file writers** (`io`): PDB and LAMMPS `data` output. Reading (CIF) works;
   writing does not yet.
-- **CLI subcommands beyond wiring**: the `aleator run` entry point loads a config and
-  exercises the engine plumbing end to end, but doesn't yet drive a real GCMC or MD run
-  from the command line.
 - **Energy-biased Monte Carlo move variants** and multi-species GCMC mixtures.
+- **MD force-field selection in the CLI's `md` config schema**: `aleator md run` fully
+  validates its config and structure file and wires up the integrator, but the
+  integrator itself is unimplemented (see above), so a real run always ends in a clean
+  `NotImplemented` rather than doing anything — the same is true of `aleator pore
+  analyze`, for the same underlying reason.
 
 ## Architecture
 
@@ -143,20 +145,60 @@ surface above stabilizes further.
 
 ## Command-line interface
 
+The CLI's design goal is to not repeat RASPA's and LAMMPS's biggest usability problems:
+run configuration is plain TOML (never a bespoke scripting language), every config is
+fully validated — every required key checked, every value range-checked — before
+anything runs, and a malformed config fails immediately with the exact key and line
+number, rather than partway through a run that might otherwise take hours.
+
 ```bash
 aleator --version
-aleator run <config.toml>
+aleator gcmc run <config.toml> [--dry-run] [--json]     # grand-canonical Monte Carlo
+aleator pore analyze <config.toml> [--dry-run] [--json] # pore geometry (not implemented yet)
+aleator md run <config.toml> [--dry-run] [--json]       # molecular dynamics (not implemented yet)
+aleator validate <config.toml>                          # validate a config, then exit
+aleator bench [--json]                                  # a quick built-in timing check
 ```
 
-Run configuration is plain TOML rather than a bespoke scripting language:
+`--dry-run` runs every check a real run would (parsing the config, opening and parsing
+the structure file, checking that force-field parameters cover every element actually
+present) and prints the fully-resolved configuration, without touching the physics.
+`--json` switches the final result to one line of machine-readable JSON on stdout;
+progress and diagnostic messages always go to stderr, so piping `--json` output is safe.
+Exit codes: `0` success, `1` a configuration or usage error, `2` the requested physics is
+genuinely not implemented yet in this build (surfaced as a clean, expected error rather
+than a crash or a silent no-op).
+
+A minimal GCMC config, with an explicit per-element Lennard-Jones parameter table rather
+than a hidden built-in force-field database:
 
 ```toml
 [run]
 name = "example"
-output_directory = "out"
 rng_seed = 42
-thread_count = 4
+
+[gcmc]
+framework_cif = "IRMOF-1.cif"
+temperature_kelvin = 298.0
+pressure_bar = 1.0
+
+[gcmc.adsorbate]
+name = "CH4"
+epsilon_kelvin = 158.5
+sigma_angstrom = 3.72
+mass_amu = 16.04246
+
+[[gcmc.framework_lj]]
+element = "Zn"
+epsilon_kelvin = 62.3992
+sigma_angstrom = 2.46155
+# ...one [[gcmc.framework_lj]] entry per element actually present in the CIF
 ```
+
+`examples/` contains real, runnable configs, including a genuine (if deliberately short)
+methane-in-IRMOF-1 GCMC run using the same real structure and force field as the
+validation suite above — run `aleator gcmc run examples/gcmc_ch4_irmof1.toml` to see it
+end to end.
 
 ## Testing
 

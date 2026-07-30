@@ -16,6 +16,7 @@ target_sources(aleator_io PUBLIC
         cif_document.hpp
         cif_error.hpp
         config.hpp
+        config_error.hpp
         element_table.hpp
         structure_io.hpp
         symmetry_operation.hpp

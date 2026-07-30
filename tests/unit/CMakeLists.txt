@@ -1,6 +1,7 @@
 add_executable(aleator_unit_tests
     test_cell_list.cc
     test_cif_parsing.cc
+    test_config_validation.cc
     test_core_types.cc
     test_lattice_geometry.cc
     test_lennard_jones_mixing.cc
