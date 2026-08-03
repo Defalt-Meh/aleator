@@ -229,8 +229,8 @@ TEST_CASE(
     REQUIRE(rebuildCount < 120);
 }
 
-TEST_CASE("Ignoring needsRebuild() can genuinely miss an interaction — the trigger is necessary, "
-          "not decorative",
+TEST_CASE("Ignoring needsRebuild() can genuinely miss an interaction -- the trigger is necessary "
+          "and not decorative",
           "[validation][neighbor]") {
     // Two particles placed just outside cutoff + skin at build time, in an
     // otherwise-empty system, then one is moved a large distance straight

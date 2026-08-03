@@ -32,17 +32,34 @@ plausible-looking guess.
 | `io` | CIF reader with full space-group symmetry expansion from the asymmetric unit | Real structures from the IZA zeolite database (LTA — cubic, 48 symmetry operations; PTY — triclinic P-1), plus malformed-input error handling |
 | `forcefield/pairwise` | Lennard-Jones energy, forces, and virial — truncated / shifted / linear-force-shifted, with analytic long-range tail corrections and Lorentz-Berthelot or geometric mixing rules | Real NIST Standard Reference Simulation Website (SRSW) reference configurations and energies; analytic forces vs. central finite difference |
 | `forcefield/electrostatics` | Standard Ewald summation: real-space, reciprocal-space, self-energy, intramolecular exclusion correction, tinfoil boundary conditions | NaCl rock-salt Madelung constant (1.747564594633…, matched to 1.5×10⁻⁸ relative — required 10⁻⁶); NIST SRSW SPC/E water reference energies, term by term; invariance under the Ewald splitting parameter; forces vs. finite difference |
-| `engines/monte_carlo` | Grand-canonical Monte Carlo: insertion, deletion, translation, and rotation moves for rigid (single- or multi-site) adsorbate molecules, with a Peng-Robinson equation of state supplying the fugacity in the chemical-potential term | Detailed balance verified as a runtime-checked algebraic identity for every move type; Widom test-particle-insertion Henry coefficient matches this engine's own low-pressure isotherm slope to 0.006% (required 2%); a full simulated methane adsorption isotherm in IRMOF-1 (real crystal structure, real UFF/TraPPE-derived force field parameters) compared point-by-point against an independently published GCMC-simulated reference isotherm |
+| `engines/monte_carlo` | Grand-canonical Monte Carlo: insertion, deletion, translation, and rotation moves for rigid (single- or multi-site) adsorbate molecules, with a Peng-Robinson equation of state supplying the fugacity in the chemical-potential term | *Validated*: detailed balance verified as a runtime-checked algebraic identity for every move type; Widom test-particle-insertion Henry coefficient matches this engine's own low-pressure isotherm slope to 0.006% on a synthetic system (required 2%), and separately matches this engine's own real IRMOF-1/methane low-pressure loading to within its tight tolerance. *Validated with known deviation*: the full four-point methane/IRMOF-1 isotherm sits systematically 12–15% below the published pyIAST reference curve — see below. |
 
-The IRMOF-1/methane comparison is the most demanding validation in the codebase and is
-reported honestly rather than rounded up: the computed isotherm sits systematically
-12–15% below the published curve across the full tested pressure range, a gap too large
-to be Monte Carlo sampling noise but consistent with a difference in long-range
-dispersion (tail-correction) convention between the two simulations rather than a defect
-in the sampling algorithm itself — the sampling machinery is independently confirmed
-correct by the exact detailed-balance and Henry-coefficient checks above. See the
-comments in `tests/validation/test_gcmc_ch4_irmof1_isotherm.cc` for the full analysis
-and the data provenance in `tests/validation/data/irmof1/PROVENANCE.md`.
+The IRMOF-1/methane comparison against the published pyIAST reference isotherm is the
+most demanding validation in the codebase and is reported honestly rather than rounded
+up. Per CLAUDE.md section 4, it is split into two separate CTest-visible tests: a tight
+test (`tests/validation/test_gcmc_ch4_irmof1_isotherm.cc`) checking this engine's own
+internal self-consistency on the real structure (no external reference involved, so a
+regression in the sampling machinery has nowhere to hide behind a wide tolerance), and
+an informational `known-deviation` test
+(`tests/known_deviation/test_gcmc_ch4_irmof1_known_deviation.cc`) that compares the full
+curve against pyIAST's published numbers and fails only if the gap widens beyond a
+checked-in baseline — never by being loose about the gap itself.
+
+The gap is real, systematic (12–15% below reference at every one of four pressure points
+spanning a 100x range), and **unresolved**. A same-session investigation ruled out
+several standing hypotheses rather than assuming them: RASPA2's own GenericMOFs
+force-field file (re-fetched live) states "shifted" truncation with "no tail
+corrections" — exactly what this codebase already does, so a *missing* tail correction
+is not an available explanation; the Lennard-Jones parameters and Lorentz-Berthelot
+mixing rule were re-verified against that same live-fetched source and match exactly;
+inaccessible-pore blocking was ruled out by reading this codebase's own insertion code
+(uniform sampling over the full cell, no accessibility filtering, so blocking can only
+affect sampling efficiency, not the equilibrium loading); and a real sensitivity check
+(cutoff 12.0 vs. 12.8 Å at constant cell size) moved the computed loading by only 0.25
+standard errors, ruling out the within-cell portion of the cutoff-margin hypothesis. A
+larger cutoff enabled by a bigger simulation cell, and pyIAST's own (publicly
+undocumented) simulation parameters, remain open and unverified. Full writeup:
+`tests/validation/data/irmof1/known_deviation_baseline.md`.
 
 ## What's declared but not yet implemented
 
@@ -57,6 +74,16 @@ but calling them throws `NotImplemented` rather than doing anything:
 - **Structure file writers** (`io`): PDB and LAMMPS `data` output. Reading (CIF) works;
   writing does not yet.
 - **Energy-biased Monte Carlo move variants** and multi-species GCMC mixtures.
+- **GCMC with electrostatics (charged adsorbates/frameworks).** `Ewald`'s
+  reciprocal-space term is a global sum over every particle's structure
+  factor and isn't decomposable into a per-particle contribution, so it
+  doesn't implement the single-particle trial-move energy GCMC's
+  insertion/deletion/translation/rotation moves need. This is enforced at
+  `MonteCarloEngine` construction, not discovered mid-run: any force field
+  whose `supportsSingleParticleEnergy()` is false (Ewald's default) is
+  rejected immediately with an error naming the class. A charged-system
+  GCMC isotherm (e.g. CO₂ in Cu-BTC) is therefore not yet possible with
+  this engine.
 - **MD force-field selection in the CLI's `md` config schema**: `aleator md run` fully
   validates its config and structure file and wires up the integrator, but the
   integrator itself is unimplemented (see above), so a real run always ends in a clean
@@ -113,11 +140,12 @@ CMake ≥ 3.25, and Ninja.
 cmake --preset dev && cmake --build --preset dev
 ctest --preset dev                    # all tests
 ctest --preset dev -L validation      # physics validation only
+ctest --preset dev -L known-deviation # documented, tracked disagreements with published references
 cmake --preset asan && cmake --build --preset asan && ctest --preset asan
 cmake --preset bench && cmake --build --preset bench && ./scripts/run_benchmarks.sh
 ```
 
-`CMakePresets.json` defines four presets:
+`CMakePresets.json` defines five presets:
 
 - `dev` — Debug build, warnings-as-errors. Day-to-day development.
 - `release` — optimized build for normal use.
@@ -126,7 +154,19 @@ cmake --preset bench && cmake --build --preset bench && ./scripts/run_benchmarks
   executable. Never used for a distributed binary or wheel; every shipped build uses
   runtime CPU dispatch (via [Highway](https://github.com/google/highway)) instead of a
   compile-time ISA assumption, so the same binary runs correctly — and takes the fastest
-  available SIMD path — across SSE4, AVX2, AVX-512, and NEON targets.
+  available SIMD path — across SSE4, AVX2, AVX-512, and NEON targets. As of this writing
+  that runtime dispatch is wired up for exactly one kernel (`vectorSum`, an internal
+  integer reduction used in tests) — no physics kernel (Lennard-Jones, Ewald, neighbor
+  search) is Highway-vectorized yet. The "faster than RASPA" performance work in CLAUDE.md
+  section 5 hasn't started; the SIMD layer today is scaffolding with one real user, not a
+  hot-path accelerator.
+- `system` — same as `dev`, but configured against system-installed dependencies instead
+  of vcpkg (no `VCPKG_ROOT` needed; Python bindings off). vcpkg is the supported,
+  CI-covered path, but `find_package()` for every dependency also succeeds against a
+  system install (e.g. Ubuntu 24.04: `apt install libhwy-dev catch2 libspdlog-dev
+  libbenchmark-dev libtomlplusplus-dev`) — a contributor who can't or doesn't want to
+  bootstrap vcpkg can still build and run the full test suite. See the
+  `system-packages` CI job for the exact, verified package list.
 
 ## Building (Python)
 
@@ -202,20 +242,35 @@ end to end.
 
 ## Testing
 
-Tests are organized into three tiers, run via CTest with matching labels:
+Tests are organized into four tiers, run via CTest with matching labels:
 
 - **unit** — fast, isolated checks of individual types and functions.
 - **integration** — cross-module wiring (e.g. that `core/` + `forcefield/` +
   `engines/` actually link and compose correctly).
 - **validation** — the physics correctness suite described in the table above: real
   published reference data, analytically known constants, and runtime-checked
-  invariants like detailed balance, not just "does it run without crashing."
+  invariants like detailed balance, not just "does it run without crashing." Every
+  entry here is tight: a real regression of ~10% or more will fail it.
+- **known-deviation** — informational tests for a validated component that still
+  disagrees with an external published reference in a way this codebase hasn't
+  fully explained yet (currently: the CH4/IRMOF-1 isotherm, see above). These never
+  turn green by loosening a tolerance around the disagreement; they compare against
+  a checked-in baseline and fail only if the gap has grown. CI reports this tier
+  separately from `validation` so a documented, tracked disagreement can never mask
+  a real regression elsewhere, and a real regression here can never hide inside a
+  suite that's "supposed to" have some slack.
 
 ```bash
 ctest --preset dev -L unit
 ctest --preset dev -L integration
 ctest --preset dev -L validation
+ctest --preset dev -L known-deviation
 ```
+
+`scripts/check_test_discovery.py` (run in CI right after the build, before any test
+tier) independently counts every `TEST_CASE` under `tests/` and compares it against
+how many CTest actually discovered, failing the build on any mismatch — the guard
+against a test silently becoming invisible to the runner (CLAUDE.md invariant #8).
 
 Reference data used by the validation suite (NIST SRSW configurations, IZA zeolite
 structures, the IRMOF-1 crystal structure and force field, published isotherm data) is

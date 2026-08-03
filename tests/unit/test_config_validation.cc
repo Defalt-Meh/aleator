@@ -38,7 +38,7 @@ sigma_angstrom = 2.46155
 
 } // namespace
 
-TEST_CASE("loadGcmcConfig rejects a missing [gcmc] table with a location", "[unit][io]") {
+TEST_CASE("loadGcmcConfig rejects a missing gcmc table with a location", "[unit][io]") {
     const auto path = writeTemp("aleator_cfg_no_gcmc.toml", "[run]\nname = \"test\"\n");
     try {
         (void)aleator::io::loadGcmcConfig(path);

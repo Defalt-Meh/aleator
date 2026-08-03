@@ -227,7 +227,7 @@ O11   O     0.5000    0.5000    0.5000
 
 } // namespace
 
-TEST_CASE("readCif parses the real IZA LTA structure (cubic, 48 symmetry operations)",
+TEST_CASE("readCif parses the real IZA LTA structure (cubic -- 48 symmetry operations)",
           "[validation][io][cif]") {
     const TempCifFile file("aleator_test_LTA.cif", kLtaCif);
     const StructureData structure = readCif(file.path());

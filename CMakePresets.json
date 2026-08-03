@@ -13,6 +13,17 @@
       }
     },
     {
+      "name": "no-vcpkg-base",
+      "hidden": true,
+      "displayName": "Base preset for system-package (non-vcpkg) builds",
+      "description": "Identical to 'base' except it sets no toolchainFile, so configure relies purely on find_package() resolving each dependency (hwy, tomlplusplus, spdlog, Catch2, benchmark) against system-installed CMake config packages. CLAUDE.md portability contract: 'The build must not hard-require vcpkg... a contributor who cannot bootstrap vcpkg must still be able to build and run the tests.'",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
       "name": "dev",
       "displayName": "Development (Debug, warnings-as-errors)",
       "description": "Debug build with full diagnostics and -Werror. Default day-to-day preset.",
@@ -62,13 +73,26 @@
         "ALEATOR_BUILD_PYTHON": "OFF",
         "ALEATOR_BENCH_NATIVE": "ON"
       }
+    },
+    {
+      "name": "system",
+      "displayName": "Development, system packages (no vcpkg)",
+      "description": "Same as 'dev' but configured against system-installed dependencies instead of vcpkg (e.g. `apt install libhwy-dev catch2 libspdlog-dev libtomlplusplus-dev libbenchmark-dev`) — no VCPKG_ROOT needed. Python bindings off (nanobind isn't assumed to be a system package); everything needed to build and run the test suite is on. See scripts/README or CI job 'system-packages' for the exact apt package list this was verified against (Ubuntu 24.04).",
+      "inherits": "no-vcpkg-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ALEATOR_BUILD_TESTS": "ON",
+        "ALEATOR_BUILD_BENCHMARKS": "ON",
+        "ALEATOR_BUILD_PYTHON": "OFF"
+      }
     }
   ],
   "buildPresets": [
     { "name": "dev", "configurePreset": "dev" },
     { "name": "release", "configurePreset": "release" },
     { "name": "asan", "configurePreset": "asan" },
-    { "name": "bench", "configurePreset": "bench" }
+    { "name": "bench", "configurePreset": "bench" },
+    { "name": "system", "configurePreset": "system" }
   ],
   "testPresets": [
     {
@@ -86,6 +110,12 @@
     {
       "name": "asan",
       "configurePreset": "asan",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    {
+      "name": "system",
+      "configurePreset": "system",
       "output": { "outputOnFailure": true },
       "execution": { "noTestsAction": "error", "stopOnFailure": false }
     }

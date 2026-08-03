@@ -29,7 +29,10 @@ struct RunConfig {
 /// `output_directory`, `rng_seed`, and `thread_count` are optional and fall
 /// back to RunConfig's defaults. Throws ConfigError (a std::runtime_error)
 /// naming the offending key and, where toml++ can supply one, the exact
-/// line/column, if `name` is missing or the file cannot be parsed as TOML.
+/// line/column, if `name` is missing, the file cannot be parsed as TOML, or
+/// `thread_count` is set to anything other than 1 -- no threading is
+/// implemented yet (CLAUDE.md invariant #11), so any other value would be
+/// silently ignored rather than honored, and is rejected instead.
 [[nodiscard]] RunConfig loadRunConfig(const std::filesystem::path& file);
 
 /// One framework element's Lennard-Jones parameters, from a

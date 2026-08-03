@@ -44,7 +44,7 @@ TEST_CASE("philox4x32_10 matches the official Random123 known-answer-test vector
     }
 }
 
-TEST_CASE("Philox4x32Rng is deterministic per (seed, streamIndex) and streams don't collide",
+TEST_CASE("Philox4x32Rng is deterministic per seed and stream index and streams don't collide",
           "[validation][rng]") {
     aleator::core::Philox4x32Rng a;
     a.seed(42, 0);
@@ -72,7 +72,8 @@ TEST_CASE("Philox4x32Rng is deterministic per (seed, streamIndex) and streams do
     REQUIRE(differentSeed.nextU64() != originalAgain.nextU64());
 }
 
-TEST_CASE("Philox4x32Rng::nextUniform stays within [0, 1) over many draws", "[validation][rng]") {
+TEST_CASE("Philox4x32Rng::nextUniform stays within the half-open unit interval over many draws",
+          "[validation][rng]") {
     aleator::core::Philox4x32Rng rng;
     rng.seed(7, 3);
     double sum = 0.0;

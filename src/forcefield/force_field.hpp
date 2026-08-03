@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 #include "core/exceptions.hpp"
@@ -31,6 +32,25 @@ struct Forces {
 class ForceField {
 public:
     virtual ~ForceField() = default;
+
+    /// Short, human-readable class name (e.g. "LennardJones", "Ewald"),
+    /// used only in diagnostics — CLAUDE.md invariant #10 requires that a
+    /// consumer rejecting an unsupported force field name the offending
+    /// class, not just report "unsupported" with no way to tell which
+    /// object was at fault.
+    [[nodiscard]] virtual std::string name() const = 0;
+
+    /// Capability query for computeParticleEnergy(): a consumer (e.g.
+    /// MonteCarloEngine, which needs single-particle trial-move energies)
+    /// must check this at construction and reject a force field that
+    /// answers false, rather than discovering the NotImplemented default
+    /// below the first time a real move is attempted. CLAUDE.md invariant
+    /// #10: "A base-class default that throws NotImplemented is a runtime
+    /// hole disguised as a compile-time contract... the engine must reject
+    /// loudly [at construction]." Defaults to false; a force field that
+    /// overrides computeParticleEnergy() must also override this to return
+    /// true, or callers that check the capability will never use it.
+    [[nodiscard]] virtual bool supportsSingleParticleEnergy() const { return false; }
 
     /// Total potential energy (K) of `particles` under this force field,
     /// given the periodic cell and a neighbor list already built at (at

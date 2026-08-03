@@ -35,7 +35,7 @@ TEST_CASE("ParticleData is a plain SoA container", "[unit][core]") {
     REQUIRE(particles.species.size() == 5);
 }
 
-TEST_CASE("Lattice stores the general triclinic matrix, not orthogonal lengths",
+TEST_CASE("Lattice stores the general triclinic matrix rather than orthogonal lengths",
           "[unit][core]") {
     // A deliberately non-orthogonal (triclinic) cell.
     std::array<std::array<double, 3>, 3> matrix{};
@@ -58,7 +58,7 @@ TEST_CASE("AlignedAllocator returns memory aligned to the requested boundary", "
     allocator.deallocate(ptr, 16);
 }
 
-TEST_CASE("Arena hands out non-overlapping, correctly aligned allocations", "[unit][core]") {
+TEST_CASE("Arena hands out non-overlapping and correctly aligned allocations", "[unit][core]") {
     aleator::core::Arena arena(1024, 64);
     std::byte* a = arena.allocate(100);
     std::byte* b = arena.allocate(100);

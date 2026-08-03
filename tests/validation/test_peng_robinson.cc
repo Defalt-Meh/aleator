@@ -39,7 +39,7 @@ TEST_CASE("PengRobinson fugacity coefficient -> 1 in the ideal-gas (P -> 0) limi
     REQUIRE(std::abs(phi - 1.0) < 1e-6);
 }
 
-TEST_CASE("PengRobinson a, b reproduce a genuine critical point at (Tc, Pc)",
+TEST_CASE("PengRobinson coefficients a and b reproduce a genuine critical point at Tc and Pc",
           "[validation][montecarlo]") {
     // At T=Tc, alpha(Tc) = (1 + kappa*(1-sqrt(Tc/Tc)))^2 = 1 exactly, so
     // A_c = a*Pc/(R^2 Tc^2) = 0.45724 exactly (by a's own definition) and

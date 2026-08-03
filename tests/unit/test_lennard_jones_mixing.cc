@@ -29,7 +29,7 @@ TEST_CASE("mixedParameters returns the exact per-species value for i == j", "[un
     REQUIRE(mixed.sigma == 4.0);
 }
 
-TEST_CASE("Lorentz-Berthelot mixing: arithmetic mean sigma, geometric mean epsilon",
+TEST_CASE("Lorentz-Berthelot mixing uses arithmetic mean sigma and geometric mean epsilon",
           "[unit][forcefield]") {
     std::vector<LennardJonesParameters> species{{1.0, 2.0}, {4.0, 6.0}};
     LennardJones lj(species, 10.0, LennardJonesTruncation::Truncated, MixingRule::LorentzBerthelot);

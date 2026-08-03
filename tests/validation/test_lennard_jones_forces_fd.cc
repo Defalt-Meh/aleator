@@ -109,7 +109,7 @@ void checkForcesAgainstFiniteDifference(const LennardJones& lj, ParticleData par
 
 } // namespace
 
-TEST_CASE("LennardJones analytic forces match central finite difference: Truncated, "
+TEST_CASE("LennardJones analytic forces match central finite difference: Truncated -- "
           "single species",
           "[validation][forcefield]") {
     const Lattice lattice = cubicLattice(10.0);
@@ -120,7 +120,7 @@ TEST_CASE("LennardJones analytic forces match central finite difference: Truncat
                                         /*tolerance=*/1e-6);
 }
 
-TEST_CASE("LennardJones analytic forces match central finite difference: Shifted, "
+TEST_CASE("LennardJones analytic forces match central finite difference: Shifted -- "
           "single species",
           "[validation][forcefield]") {
     const Lattice lattice = cubicLattice(10.0);
@@ -131,7 +131,7 @@ TEST_CASE("LennardJones analytic forces match central finite difference: Shifted
                                         /*tolerance=*/1e-6);
 }
 
-TEST_CASE("LennardJones analytic forces match central finite difference: LinearForceShifted, "
+TEST_CASE("LennardJones analytic forces match central finite difference: LinearForceShifted -- "
           "single species",
           "[validation][forcefield]") {
     const Lattice lattice = cubicLattice(10.0);
@@ -142,7 +142,7 @@ TEST_CASE("LennardJones analytic forces match central finite difference: LinearF
                                         /*tolerance=*/1e-6);
 }
 
-TEST_CASE("LennardJones analytic forces match central finite difference: two species, "
+TEST_CASE("LennardJones analytic forces match central finite difference: two species -- "
           "Lorentz-Berthelot mixing",
           "[validation][forcefield]") {
     const Lattice lattice = cubicLattice(10.0);
@@ -154,7 +154,7 @@ TEST_CASE("LennardJones analytic forces match central finite difference: two spe
                                         /*tolerance=*/1e-6);
 }
 
-TEST_CASE("LennardJones analytic forces match central finite difference: two species, "
+TEST_CASE("LennardJones analytic forces match central finite difference: two species -- "
           "geometric mixing",
           "[validation][forcefield]") {
     const Lattice lattice = cubicLattice(10.0);

@@ -69,8 +69,15 @@ jobs:
       - name: Build
         run: cmake --build --preset dev
 
+      - name: Check test discovery (CLAUDE.md invariant 8)
+        shell: bash
+        run: python3 scripts/check_test_discovery.py --build-dir build/dev --tests-dir tests
+
       - name: Test
-        run: ctest --preset dev
+        run: ctest --preset dev -LE known-deviation
+
+      - name: Test (known-deviation, reported separately -- CLAUDE.md section 4)
+        run: ctest --preset dev -L known-deviation
 
       - name: Upload benchmark baseline artifact
         if: matrix.name == 'ubuntu-gcc13'
@@ -109,6 +116,43 @@ jobs:
 
       - name: Test under ASan + UBSan
         run: ctest --preset asan
+
+  system-packages:
+    name: system-packages (Ubuntu, apt, no vcpkg)
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc-13
+      CXX: g++-13
+    steps:
+      - uses: actions/checkout@v4
+
+      # CLAUDE.md portability contract: "The build must not hard-require
+      # vcpkg... a contributor who cannot bootstrap vcpkg must still be
+      # able to build and run the tests." This job proves it: no
+      # VCPKG_ROOT is ever set, every dependency comes from apt, and
+      # configure uses the 'system' preset (no toolchainFile). Package
+      # names/versions verified against Ubuntu 24.04 (noble)'s real
+      # package index, not assumed:
+      #   libhwy-dev 1.0.7, catch2 3.4.0, libspdlog-dev 1.12.0,
+      #   libbenchmark-dev 1.8.3, libtomlplusplus-dev 3.4.0.
+      - name: Install compiler and dependencies from apt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-13 g++-13 ninja-build \
+            libhwy-dev catch2 libspdlog-dev libbenchmark-dev libtomlplusplus-dev libfmt-dev
+
+      - name: Configure (system preset, no VCPKG_ROOT)
+        run: cmake --preset system
+
+      - name: Build
+        run: cmake --build --preset system
+
+      - name: Check test discovery (CLAUDE.md invariant 8)
+        run: python3 scripts/check_test_discovery.py --build-dir build/system --tests-dir tests
+
+      - name: Test
+        run: ctest --preset system -LE known-deviation
 
   wheels:
     name: wheels (${{ matrix.os }})

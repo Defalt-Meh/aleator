@@ -63,6 +63,12 @@ public:
                  LennardJonesTruncation truncation = LennardJonesTruncation::Truncated,
                  MixingRule mixingRule = MixingRule::LorentzBerthelot);
 
+    [[nodiscard]] std::string name() const override { return "LennardJones"; }
+
+    /// True: computeParticleEnergy() below is a real direct O(N) pairwise
+    /// sum, not the NotImplemented default.
+    [[nodiscard]] bool supportsSingleParticleEnergy() const override { return true; }
+
     /// Sum of pairwise V(r) over every pair in `neighbors.pairs()` with
     /// minimum-image separation <= cutoff(). Does NOT include the
     /// long-range tail correction — see tailEnergyCorrection(), which

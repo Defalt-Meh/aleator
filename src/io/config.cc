@@ -115,6 +115,20 @@ RunConfig parseRunTable(const toml::table& root, const std::filesystem::path& fi
         optionalValue<std::int64_t>(run, "rng_seed", 0, filePath, "run.rng_seed", "an integer"));
     config.threadCount = static_cast<unsigned>(optionalValue<std::int64_t>(
         run, "thread_count", 1, filePath, "run.thread_count", "an integer"));
+    // CLAUDE.md invariant #11: "A key the config schema accepts and the
+    // code ignores is a lie to the user." There is no threading anywhere
+    // in src/ (see CLAUDE.md section 0) -- every run is single-threaded
+    // regardless of this value, so any value other than the one that
+    // matches reality is rejected here rather than silently accepted and
+    // ignored.
+    if (config.threadCount != 1) {
+        const auto [line, column] = locationOf(run["thread_count"].node(), run);
+        throw ConfigError(filePath, "run.thread_count",
+                           "not supported in this build: no threading is implemented yet "
+                           "(every run is single-threaded regardless of this value); only "
+                           "thread_count = 1 is accepted",
+                           line, column);
+    }
     return config;
 }
 

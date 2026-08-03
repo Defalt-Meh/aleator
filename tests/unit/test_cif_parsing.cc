@@ -41,7 +41,7 @@ TEST_CASE("parseCifNumber throws a clear error on garbage input", "[unit][io][ci
     REQUIRE_THROWS_AS(parseCifNumber("abc"), CifParseError);
 }
 
-TEST_CASE("parseCifDocument reads single tags, quoted values, and a loop_", "[unit][io][cif]") {
+TEST_CASE("parseCifDocument reads single tags and quoted values inside a loop_", "[unit][io][cif]") {
     const std::string text = R"CIF(
 data_TEST
 _cell_length_a    10.000

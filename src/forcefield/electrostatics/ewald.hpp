@@ -75,6 +75,19 @@ public:
     Ewald(double alpha, double realSpaceCutoff, int kMax,
           std::vector<std::pair<std::size_t, std::size_t>> exclusions = {});
 
+    [[nodiscard]] std::string name() const override { return "Ewald"; }
+
+    /// Does NOT override computeParticleEnergy(): the reciprocal-space term
+    /// is a global sum over the structure factor of every particle and
+    /// isn't decomposable into a per-particle contribution without
+    /// incremental structure-factor bookkeeping this class doesn't
+    /// implement (see CLAUDE.md section 0, defect 2). Leaving
+    /// supportsSingleParticleEnergy() at ForceField's `false` default is
+    /// the deliberate, correct choice here, not an oversight — it's what
+    /// lets MonteCarloEngine's constructor reject an Ewald force field
+    /// loudly instead of the engine discovering the NotImplemented hole
+    /// mid-run.
+
     /// Throws std::invalid_argument if the system's net charge is not
     /// (numerically) zero — the reciprocal-space k=0 term is only
     /// well-defined (finite) for a neutral system; a uniform neutralizing

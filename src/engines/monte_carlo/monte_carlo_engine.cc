@@ -131,6 +131,22 @@ MonteCarloEngine::MonteCarloEngine(core::ParticleData frameworkParticles, core::
     if (!(fugacityInternal_ > 0.0)) {
         throw std::invalid_argument("MonteCarloEngine: fugacityPascal must be positive");
     }
+    // CLAUDE.md invariant #10: every trial move below (translation,
+    // rotation, insertion, deletion) calls forceField_->computeParticleEnergy()
+    // for the moved molecule against the framework. A force field that
+    // doesn't support that (e.g. Ewald -- see ewald.hpp) must be rejected
+    // here, at construction, not discovered as a NotImplemented throw the
+    // first time run() is called -- "discovering an unsupported combination
+    // six hours into a run is a defect."
+    if (!forceField_->supportsSingleParticleEnergy()) {
+        throw std::invalid_argument(
+            "MonteCarloEngine: force field '" + forceField_->name() +
+            "' does not support single-particle trial-move energies "
+            "(supportsSingleParticleEnergy() == false), which GCMC's "
+            "translation/rotation/insertion/deletion moves all require. "
+            "This is not yet implemented for this force field -- see "
+            "CLAUDE.md section 0.");
+    }
 }
 
 void MonteCarloEngine::run(std::size_t numSteps) {
