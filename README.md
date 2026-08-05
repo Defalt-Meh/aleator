@@ -1,4 +1,5 @@
 # Aleator
+## A periodic-system core for Monte Carlo, molecular dynamics, and porous-material geometry analysis 
 
 A molecular simulation engine in modern C++23 covering three domains that are usually
 separate tools — grand-canonical and canonical Monte Carlo, molecular dynamics, and
