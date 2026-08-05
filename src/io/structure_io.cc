@@ -191,6 +191,7 @@ StructureData readCif(const std::filesystem::path& file) {
     const int yCol = atomLoop->columnIndex("_atom_site_fract_y");
     const int zCol = atomLoop->columnIndex("_atom_site_fract_z");
     const int occCol = atomLoop->columnIndex("_atom_site_occupancy");
+    const int chargeCol = atomLoop->columnIndex("_atom_site_charge");
 
     std::unordered_map<std::string, std::uint32_t> speciesIndex;
 
@@ -212,6 +213,13 @@ StructureData readCif(const std::filesystem::path& file) {
         const double occupancy =
             occCol >= 0 ? tryParseCifNumber(row[static_cast<std::size_t>(occCol)]).value_or(1.0)
                         : 1.0;
+        // Optional -- absent for the (already-validated) uncharged
+        // methane/IRMOF-1 case, present for DDEC/DFT-partitioned partial
+        // charges (e.g. the CO2/IRMOF-1 CRAFTED reference). Defaults to
+        // 0.0, matching this reader's previous unconditional behavior.
+        const double charge =
+            chargeCol >= 0 ? tryParseCifNumber(row[static_cast<std::size_t>(chargeCol)]).value_or(0.0)
+                            : 0.0;
 
         const auto speciesIt = speciesIndex.find(element);
         std::uint32_t speciesId{};
@@ -235,7 +243,7 @@ StructureData readCif(const std::filesystem::path& file) {
             const auto cartesian = result.lattice.fractionalToCartesian(
                 {fractional[0], fractional[1], fractional[2]});
             result.particles.push_back(cartesian[0], cartesian[1], cartesian[2], 0.0, 0.0, 0.0,
-                                        *mass, 0.0, speciesId);
+                                        *mass, charge, speciesId);
             result.occupancy.push_back(occupancy);
             result.sourceLabel.push_back(label);
         }

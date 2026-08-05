@@ -345,3 +345,51 @@ TEST_CASE("readCif throws rather than opening a nonexistent file silently",
         std::filesystem::temp_directory_path() / "aleator_test_does_not_exist_12345.cif";
     REQUIRE_THROWS(readCif(missing));
 }
+
+TEST_CASE("readCif parses an optional _atom_site_charge column, applying each row's charge to "
+          "every symmetry-equivalent image",
+          "[validation][io][cif]") {
+    // CLAUDE.md charged-GCMC milestone: real DDEC/DFT-partitioned framework
+    // partial charges (e.g. the CO2/IRMOF-1 CRAFTED reference structure)
+    // need this column read, not silently defaulted to zero the way the
+    // earlier, uncharged methane/IRMOF-1 milestone's CIFs never exercised.
+    const std::string cif = R"CIF(data_CHARGED_TEST
+_cell_length_a    10.000
+_cell_length_b    10.000
+_cell_length_c    10.000
+_cell_angle_alpha 90.0
+_cell_angle_beta  90.0
+_cell_angle_gamma 90.0
+
+loop_
+_symmetry_equiv_pos_as_xyz
+ 'x, y, z'
+ '-x, -y, -z'
+
+loop_
+_atom_site_label
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_charge
+Na1  0.10  0.20  0.30   0.700
+Cl1  0.40  0.50  0.60  -0.700
+)CIF";
+    const TempCifFile file("aleator_test_charged.cif", cif);
+    const StructureData structure = readCif(file.path());
+
+    // Two asymmetric-unit rows x 2 symmetry operations (identity +
+    // inversion, neither maps a site onto itself here) = 4 atoms.
+    REQUIRE(structure.particles.size() == 4);
+
+    double totalCharge = 0.0;
+    for (std::size_t i = 0; i < structure.particles.size(); ++i) {
+        const double q = structure.particles.charge[i];
+        // Every atom's charge must be exactly one of the two input values
+        // (not zero, not some other value) -- i.e. every symmetry image
+        // inherited its row's charge.
+        REQUIRE((std::abs(q - 0.7) < 1e-12 || std::abs(q + 0.7) < 1e-12));
+        totalCharge += q;
+    }
+    REQUIRE(std::abs(totalCharge) < 1e-12); // net neutral by construction
+}

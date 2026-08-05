@@ -1,5 +1,6 @@
 add_executable(aleator_known_deviation_tests
     test_gcmc_ch4_irmof1_known_deviation.cc
+    test_gcmc_co2_irmof1_known_deviation.cc
 )
 aleator_configure_target(aleator_known_deviation_tests)
 
@@ -19,6 +20,7 @@ target_link_libraries(aleator_known_deviation_tests
         aleator::core::memory
         aleator::core::math
         aleator::engines::monte_carlo
+        aleator::forcefield::electrostatics
         aleator::forcefield::pairwise
         aleator::io
 )

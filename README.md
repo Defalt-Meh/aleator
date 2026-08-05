@@ -32,7 +32,7 @@ plausible-looking guess.
 | `io` | CIF reader with full space-group symmetry expansion from the asymmetric unit | Real structures from the IZA zeolite database (LTA — cubic, 48 symmetry operations; PTY — triclinic P-1), plus malformed-input error handling |
 | `forcefield/pairwise` | Lennard-Jones energy, forces, and virial — truncated / shifted / linear-force-shifted, with analytic long-range tail corrections and Lorentz-Berthelot or geometric mixing rules | Real NIST Standard Reference Simulation Website (SRSW) reference configurations and energies; analytic forces vs. central finite difference |
 | `forcefield/electrostatics` | Standard Ewald summation: real-space, reciprocal-space, self-energy, intramolecular exclusion correction, tinfoil boundary conditions | NaCl rock-salt Madelung constant (1.747564594633…, matched to 1.5×10⁻⁸ relative — required 10⁻⁶); NIST SRSW SPC/E water reference energies, term by term; invariance under the Ewald splitting parameter; forces vs. finite difference |
-| `engines/monte_carlo` | Grand-canonical Monte Carlo: insertion, deletion, translation, and rotation moves for rigid (single- or multi-site) adsorbate molecules, with a Peng-Robinson equation of state supplying the fugacity in the chemical-potential term | *Validated*: detailed balance verified as a runtime-checked algebraic identity for every move type; Widom test-particle-insertion Henry coefficient matches this engine's own low-pressure isotherm slope to 0.006% on a synthetic system (required 2%), and separately matches this engine's own real IRMOF-1/methane low-pressure loading to within its tight tolerance. *Validated with known deviation*: the full four-point methane/IRMOF-1 isotherm sits systematically 12–15% below the published pyIAST reference curve — see below. |
+| `engines/monte_carlo` | Grand-canonical Monte Carlo: insertion, deletion, translation, and rotation moves for rigid (single- or multi-site) adsorbate molecules, with a Peng-Robinson equation of state supplying the fugacity in the chemical-potential term. Supports charged adsorbates/frameworks via an incrementally-maintained Ewald reciprocal-space cache (`EwaldIncrementalState`) — see below. | *Validated*: detailed balance verified as a runtime-checked algebraic identity for every move type; Widom test-particle-insertion Henry coefficient matches this engine's own low-pressure isotherm slope to 0.006% on a synthetic system (required 2%), and separately matches this engine's own real IRMOF-1/methane low-pressure loading to within its tight tolerance. *Validated with known deviation*: the full four-point methane/IRMOF-1 isotherm sits systematically 12–15% below the published pyIAST reference curve — see below. *Validated with known deviation (charged)*: real CO2/IRMOF-1 loading (Ewald electrostatics, real DDEC framework charges) matches a published reference to well under 1σ at low/mid pressure; the high-pressure point deviates by ~2.2σ (~19.5%) — see below. |
 
 The IRMOF-1/methane comparison against the published pyIAST reference isotherm is the
 most demanding validation in the codebase and is reported honestly rather than rounded
@@ -61,6 +61,50 @@ larger cutoff enabled by a bigger simulation cell, and pyIAST's own (publicly
 undocumented) simulation parameters, remain open and unverified. Full writeup:
 `tests/validation/data/irmof1/known_deviation_baseline.md`.
 
+### Charged adsorbates: incremental Ewald for GCMC
+
+The reciprocal-space Ewald sum is a global function of every charge's structure factor
+S(k) — it does not decompose into a per-particle contribution the way the real-space
+term does, so a GCMC trial move naively recomputing it from scratch would cost O(N) per
+trial (defeating the point of trial moves) or worse. `forcefield/electrostatics/
+ewald_incremental_state.hpp` solves this with a dedicated, engine-owned cache: S(k), the
+self energy, and the intramolecular exclusion correction are maintained incrementally —
+`propose*()` computes a trial energy delta without mutating anything, `commit*()` folds
+it in only on acceptance, so a rejected move needs no rollback logic at all (there is
+nothing to undo). This is deliberately **not** exposed through `ForceField::
+computeParticleEnergy()`/`supportsSingleParticleEnergy()`: that interface's contract is
+"the complete per-particle energy," which the reciprocal term structurally cannot supply
+that way, so `Ewald` honestly keeps advertising `false` there and `MonteCarloEngine`
+gained a separate, explicitly-typed optional `Ewald` component instead. Real-space
+Coulomb, in contrast, genuinely is pairwise/local, so it stays a direct O(N) scan
+(`Ewald::realSpaceParticleEnergy`), the same cost structure as the dispersion force
+field.
+
+Validated: a real charged system (the same real IRMOF-1 framework, now carrying its
+real DDEC framework charges, plus rigid CO2 molecules) run through `MonteCarloEngine`
+for 10⁵ real GCMC steps agrees with a full from-scratch recomputation of the cached
+energy to machine precision throughout (drift 0.00×10⁰–1.79×10⁻¹⁶ relative, gated at
+1×10⁻¹⁰); a rejected trial leaves the cache provably bit-identical; and inserting then
+deleting the same molecule produces exactly opposite energy deltas (the energy-level
+identity the detailed-balance ratio proof depends on). Long-run floating-point
+accumulation in the incremental cache is bounded by periodic resync against a fresh
+recomputation — every 100 accepted moves in production, an interval set from a real
+measurement (500 was enough at a small synthetic system's scale but not at the real
+~850-charge IRMOF-1/CO2 system's scale, where it left ~9×10⁻¹⁰ relative drift).
+
+The real published-reference test — CO2 in IRMOF-1 at 298 K, since HKUST-1/Cu-BTC (this
+milestone's other candidate system) was checked first and confirmed absent from the only
+available real GCMC-simulated reference dataset — reproduces the same "validated with
+known deviation" honesty as the methane case: computed loading at 10⁴ and 10⁵ Pa matches
+the published reference (the CRAFTED database's real RASPA GCMC simulation of this exact
+system) to well under 1 combined standard error (~0.09σ and ~0.19σ); at 10⁶ Pa
+(~127 adsorbed molecules at equilibrium) the computed loading sits ~19.5% (~2.2σ) below
+the reference. The gap is tracked, not hidden: the charged-GCMC energy machinery itself
+is independently verified correct (the drift gate above), and the leading suspected
+cause — this test's equilibration length being calibrated for low occupancy and likely
+insufficient at ~127 molecules — is disclosed as unconfirmed rather than assumed. Full
+writeup: `tests/validation/data/co2_irmof1/known_deviation_baseline.md`.
+
 ## What's declared but not yet implemented
 
 These have interfaces defined (so the rest of the codebase can be written against them)
@@ -74,16 +118,6 @@ but calling them throws `NotImplemented` rather than doing anything:
 - **Structure file writers** (`io`): PDB and LAMMPS `data` output. Reading (CIF) works;
   writing does not yet.
 - **Energy-biased Monte Carlo move variants** and multi-species GCMC mixtures.
-- **GCMC with electrostatics (charged adsorbates/frameworks).** `Ewald`'s
-  reciprocal-space term is a global sum over every particle's structure
-  factor and isn't decomposable into a per-particle contribution, so it
-  doesn't implement the single-particle trial-move energy GCMC's
-  insertion/deletion/translation/rotation moves need. This is enforced at
-  `MonteCarloEngine` construction, not discovered mid-run: any force field
-  whose `supportsSingleParticleEnergy()` is false (Ewald's default) is
-  rejected immediately with an error naming the class. A charged-system
-  GCMC isotherm (e.g. CO₂ in Cu-BTC) is therefore not yet possible with
-  this engine.
 - **MD force-field selection in the CLI's `md` config schema**: `aleator md run` fully
   validates its config and structure file and wires up the integrator, but the
   integrator itself is unimplemented (see above), so a real run always ends in a clean

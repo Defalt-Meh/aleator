@@ -2,8 +2,11 @@ add_executable(aleator_validation_tests
     test_cif_real_structures.cc
     test_ewald_alpha_independence.cc
     test_ewald_forces_fd.cc
+    test_ewald_incremental_state.cc
     test_ewald_madelung.cc
     test_ewald_spce_water.cc
+    test_gcmc_charged_detailed_balance.cc
+    test_gcmc_co2_irmof1_isotherm.cc
     test_gcmc_detailed_balance.cc
     test_gcmc_ch4_irmof1_isotherm.cc
     test_gcmc_widom_henry.cc

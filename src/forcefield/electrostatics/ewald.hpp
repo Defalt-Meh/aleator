@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <utility>
 #include <vector>
@@ -113,6 +114,51 @@ public:
         const noexcept {
         return exclusions_;
     }
+
+    /// One reciprocal-lattice vector's contribution: k itself, and
+    /// exp(-k^2/(4*alpha^2))/k^2 (the weight multiplying |S(k)|^2 in
+    /// U_reciprocal). Exposed publicly (rather than staying an ewald.cc
+    /// implementation detail) so a persistent, incremental structure-factor
+    /// cache -- necessarily owned OUTSIDE this class, see
+    /// EwaldIncrementalState's doc comment for why -- can enumerate the
+    /// exact same k-vectors/weights this class's own computeEnergy() uses,
+    /// with no risk of the two drifting apart (e.g. if kMax's spherical-vs-
+    /// cubic truncation convention is ever revisited, there is exactly one
+    /// place that encodes it).
+    struct ReciprocalTerm {
+        std::array<double, 3> k;
+        double weight;
+    };
+
+    /// The full set of reciprocal-lattice terms this object's alpha/kMax
+    /// would sum over for `lattice` -- i.e. exactly what computeEnergy()
+    /// builds internally, exposed for callers (see above) that need to
+    /// enumerate them directly rather than going through computeEnergy().
+    [[nodiscard]] std::vector<ReciprocalTerm> reciprocalTerms(
+        const core::Lattice& lattice) const;
+
+    /// Real-space (erfc(alpha*r)/r) contribution of particle `index`
+    /// against every other particle in `particles` NOT in
+    /// `excludedIndices`, direct O(N) scan under minimum image + this
+    /// object's realSpaceCutoff() -- same contract/pattern as
+    /// LennardJones::computeParticleEnergy, restricted to the real-space
+    /// term only (no self energy, no exclusion correction: those are
+    /// O(1)-per-molecule quantities for a rigid molecule, computed
+    /// separately by EwaldIncrementalState, not per-particle here).
+    ///
+    /// Deliberately NOT named computeParticleEnergy() and NOT what
+    /// ForceField::supportsSingleParticleEnergy() reports on: that
+    /// interface's contract is "the complete energy of this particle
+    /// against everything else," which Ewald's reciprocal-space term
+    /// structurally cannot supply this way (CLAUDE.md section 0) --
+    /// calling this alone would silently omit reciprocal, self, and
+    /// exclusion contributions. It exists as an explicit, honestly-scoped
+    /// helper for the one caller that already knows exactly what it is and
+    /// combines it correctly with the other terms: MonteCarloEngine's
+    /// charged-GCMC path.
+    [[nodiscard]] double realSpaceParticleEnergy(
+        std::size_t index, const core::ParticleData& particles, const core::Lattice& lattice,
+        const std::vector<std::size_t>& excludedIndices = {}) const;
 
 private:
     double alpha_;

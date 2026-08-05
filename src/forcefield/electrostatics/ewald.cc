@@ -120,14 +120,6 @@ struct ExclusionSet {
     }
 };
 
-/// One reciprocal-lattice vector's contribution, precomputed once and
-/// shared between computeEnergy() and computeForces() so both read from
-/// the exact same structure-factor evaluation.
-struct ReciprocalTerm {
-    Vec3 k;
-    double weight; // exp(-k^2 / (4*alpha^2)) / k^2
-};
-
 /// Reciprocal-lattice index vectors are truncated to a SPHERE in index
 /// space (n0^2 + n1^2 + n2^2 < kMax^2 + 2), not a cube (|n_i| <= kMax
 /// independently) — a cubic truncation is anisotropic, pulling in "corner"
@@ -142,13 +134,13 @@ struct ReciprocalTerm {
 /// large across all four reference configurations, because for kMax=5 the
 /// n^2 == 27 shell alone is 32 extra vectors: the 24 permutations of
 /// (+-5,+-1,+-1) and 8 of (+-3,+-3,+-3). Switching to strict < resolved it.
-std::vector<ReciprocalTerm> buildReciprocalTerms(const core::Lattice& lattice, double alpha,
-                                                  int kMax) {
+std::vector<Ewald::ReciprocalTerm> buildReciprocalTerms(const core::Lattice& lattice, double alpha,
+                                                          int kMax) {
     const auto [b0, b1, b2] = reciprocalVectors(lattice);
     const double fourAlphaSquared = 4.0 * alpha * alpha;
     const int kMaxSquaredBound = kMax * kMax + 2;
 
-    std::vector<ReciprocalTerm> terms;
+    std::vector<Ewald::ReciprocalTerm> terms;
     terms.reserve(static_cast<std::size_t>((2 * kMax + 1) * (2 * kMax + 1) * (2 * kMax + 1)));
     for (int n0 = -kMax; n0 <= kMax; ++n0) {
         for (int n1 = -kMax; n1 <= kMax; ++n1) {
@@ -222,6 +214,38 @@ Ewald::Ewald(double alpha, double realSpaceCutoff, int kMax,
 double Ewald::computeEnergy(const core::ParticleData& particles, const core::Lattice& lattice,
                              const core::NeighborList& neighbors) const {
     return computeEnergyBreakdown(particles, lattice, neighbors).total();
+}
+
+std::vector<Ewald::ReciprocalTerm> Ewald::reciprocalTerms(const core::Lattice& lattice) const {
+    return buildReciprocalTerms(lattice, alpha_, kMax_);
+}
+
+double Ewald::realSpaceParticleEnergy(std::size_t index, const core::ParticleData& particles,
+                                       const core::Lattice& lattice,
+                                       const std::vector<std::size_t>& excludedIndices) const {
+    double energy = 0.0;
+    const Vec3 pi = position(particles, index);
+    for (std::size_t j = 0; j < particles.size(); ++j) {
+        if (j == index) {
+            continue;
+        }
+        bool excluded = false;
+        for (std::size_t ex : excludedIndices) {
+            if (ex == j) {
+                excluded = true;
+                break;
+            }
+        }
+        if (excluded) {
+            continue;
+        }
+        const double r = norm(lattice.minimumImageDisplacement(pi, position(particles, j)));
+        if (r > realSpaceCutoff_) {
+            continue;
+        }
+        energy += particles.charge[index] * particles.charge[j] * realSpaceKernel(r, alpha_);
+    }
+    return energy * kCoulombConstant;
 }
 
 EwaldEnergyBreakdown Ewald::computeEnergyBreakdown(const core::ParticleData& particles,

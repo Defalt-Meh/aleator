@@ -8,6 +8,8 @@
 #include "core/math/counter_based_rng.hpp"
 #include "core/math/particle_data.hpp"
 #include "engines/monte_carlo/molecule_species.hpp"
+#include "forcefield/electrostatics/ewald.hpp"
+#include "forcefield/electrostatics/ewald_incremental_state.hpp"
 #include "forcefield/force_field.hpp"
 
 namespace aleator::engines {
@@ -47,12 +49,29 @@ public:
     /// fugacityPascal) at the desired external pressure; converted once,
     /// here, to this codebase's internal K/Angstrom^3 energy-density
     /// convention via kPascalToInternal.
+    ///
+    /// `electrostatics`, if given, adds Coulomb interactions on top of
+    /// `forceField`'s dispersion energy: real-space (direct O(N) scan, via
+    /// Ewald::realSpaceParticleEnergy — the same cost structure as
+    /// `forceField`'s own dispersion term) plus reciprocal-space/self/
+    /// exclusion (via an incrementally-maintained EwaldIncrementalState —
+    /// see that class's doc comment for why the reciprocal term needs a
+    /// dedicated cache rather than going through `forceField`-style
+    /// per-particle calls). `forceField` itself is unaffected and still
+    /// independently required to support single-particle energies
+    /// (invariant #10) for the dispersion term; `electrostatics` is
+    /// exempt from that check because it is never routed through
+    /// `ForceField::computeParticleEnergy` at all — see CLAUDE.md section
+    /// 0. Every adsorbate site's charge, plus `frameworkParticles`'
+    /// charges, must sum to (numerically) zero; checked at construction
+    /// and per-species, not discovered mid-run.
     MonteCarloEngine(core::ParticleData frameworkParticles, core::Lattice lattice,
                       std::shared_ptr<const forcefield::ForceField> forceField,
                       std::unique_ptr<core::CounterBasedRng> rng, double temperatureKelvin,
                       MoleculeSpecies species, double fugacityPascal,
                       double maxTranslationDisplacementAngstrom = 1.5,
-                      double maxRotationAngleRadians = 0.5);
+                      double maxRotationAngleRadians = 0.5,
+                      std::shared_ptr<const forcefield::Ewald> electrostatics = nullptr);
 
     /// Runs `numSteps` MC steps. For Ensemble::Gcmc, each step picks one of
     /// {translation, rotation, insertion, deletion} uniformly at random and
@@ -83,6 +102,21 @@ public:
     /// against the low-pressure isotherm slope.
     [[nodiscard]] double widomInsertionHenryCoefficient(std::size_t numTrials) const;
 
+    /// |committed electrostatic cache energy - a fresh from-scratch
+    /// recomputation|, i.e. exactly the quantity the drift-gate validation
+    /// test checks stays below 1e-10 relative -- 0.0 if this engine has no
+    /// electrostatics. A diagnostic hook for tests, not physics API (see
+    /// EwaldIncrementalState::rawStateForTesting() for the same naming
+    /// convention).
+    [[nodiscard]] double electrostaticEnergyDriftForTesting() const;
+
+    /// The committed electrostatic (reciprocal + self + exclusion) cache
+    /// energy itself -- 0.0 if this engine has no electrostatics. Paired
+    /// with electrostaticEnergyDriftForTesting() so a test can compute a
+    /// *relative* drift, matching the drift-gate's 1e-10 relative
+    /// requirement rather than an arbitrary absolute one.
+    [[nodiscard]] double electrostaticEnergyForTesting() const;
+
 private:
     Ensemble ensemble_;
     core::ParticleData particles_;
@@ -99,11 +133,32 @@ private:
     double maxRotationAngle_ = 0.5;
     std::vector<std::vector<std::size_t>> molecules_;
 
+    // Charged-GCMC state (populated only when the GCMC constructor is
+    // given a non-null `electrostatics`; ewaldState_ is null otherwise, and
+    // every electrostatics-related branch is skipped).
+    std::shared_ptr<const forcefield::Ewald> electrostatics_;
+    std::unique_ptr<forcefield::EwaldIncrementalState> ewaldState_;
+    std::size_t movesSinceEwaldResync_ = 0;
+
     void attemptTranslation();
     void attemptRotation();
     void attemptInsertion();
     void attemptDeletion();
     void removeMolecule(std::size_t moleculeIndex);
+
+    /// Real-space + reciprocal/self/exclusion Coulomb energy of `sites`
+    /// (a rigid molecule's site indices in `particles_`) against
+    /// everything else, i.e. the electrostatic analogue of
+    /// moleculeInteractionEnergy() -- 0.0 if electrostatics_ is null.
+    [[nodiscard]] double moleculeElectrostaticRealSpaceEnergy(
+        const std::vector<std::size_t>& sites) const;
+
+    /// Periodically replaces ewaldState_'s incrementally-maintained cache
+    /// with a fresh from-scratch computation, bounding long-run
+    /// floating-point accumulation error (EwaldIncrementalState::resync()'s
+    /// doc comment). Called after every accepted move once electrostatics_
+    /// is in use; a no-op when electrostatics_ is null.
+    void maybeResyncEwald();
 };
 
 } // namespace aleator::engines

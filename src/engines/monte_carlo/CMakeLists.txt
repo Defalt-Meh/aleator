@@ -15,6 +15,7 @@ target_link_libraries(aleator_engines_monte_carlo
         aleator::core::geometry
         aleator::core::math
         aleator::forcefield::common
+        aleator::forcefield::electrostatics
     PRIVATE
         aleator::core::common
 )
