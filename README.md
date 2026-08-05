@@ -26,7 +26,7 @@ plausible-looking guess.
 
 | Component | What it does | Validated against |
 |---|---|---|
-| `core/geometry` | General triclinic `Lattice`: fractional↔Cartesian conversion, minimum-image convention, cutoff validation, lattice reduction | Brute-force search over up to 125 periodic images on cubic and pathological (60°/60°/60°) triclinic cells |
+| `core/geometry` | General triclinic `Lattice`: fractional↔Cartesian conversion, minimum-image convention, cutoff validation, lattice reduction, plus an exact O(1) fast path for orthorhombic cells (see Performance below) | Brute-force search over up to 125 periodic images on cubic and pathological (60°/60°/60°) triclinic cells, including cells barely-but-genuinely skewed off 90° (to confirm the fast path is never taken where it shouldn't be) |
 | `core/neighbor` | `CellList` + `VerletList` with a displacement-based rebuild trigger | Exact agreement with brute-force O(N²) pair search, cubic and triclinic, including a continuous-motion rebuild-trigger stress test |
 | `core/math` | Philox4x32-10 counter-based RNG, one independent reproducible stream per (seed, thread) | Bit-exact match against the official Random123 known-answer-test vectors |
 | `io` | CIF reader with full space-group symmetry expansion from the asymmetric unit | Real structures from the IZA zeolite database (LTA — cubic, 48 symmetry operations; PTY — triclinic P-1), plus malformed-input error handling |
@@ -104,6 +104,89 @@ is independently verified correct (the drift gate above), and the leading suspec
 cause — this test's equilibration length being calibrated for low occupancy and likely
 insufficient at ~127 molecules — is disclosed as unconfirmed rather than assumed. Full
 writeup: `tests/validation/data/co2_irmof1/known_deviation_baseline.md`.
+
+### Performance: the CH4/IRMOF-1 isotherm, 32 s → 3.97 s
+
+The four-point CH4/IRMOF-1 known-deviation isotherm
+(`tests/known_deviation/test_gcmc_ch4_irmof1_known_deviation.cc`, 480,000 total GCMC
+steps) is this codebase's one already-validated headline workload, and "faster than
+RASPA" is the pitch (CLAUDE.md section 5), so it is the one benchmarked here.
+Before this milestone it took 32.0 s (Release) / 58 s (Debug, `dev` preset). Profiling
+first (`sample`, macOS; a real 25 s stack-sample window, not a guess) showed **91.2%
+of all time inside `Lattice::minimumImageDisplacement`** — called from a direct
+O(frameworkCount) scan on every trial move, `LennardJones::pairEnergy` itself was only
+6.8%. Two things were tried; only the second one actually moved the needle for this
+system:
+
+1. **Guest-guest interactions wired through `core::CellList`** (translation/insertion/
+   deletion now query a `CellList` built over the mobile guest-molecule tail of
+   `particles_` instead of scanning every particle). Proven an *exact* refactor, not an
+   approximation: `LennardJones::computeParticleEnergyOverCandidates` sums over a
+   candidate list instead of `0..N`, which is bit-identical to the old full scan as long
+   as (a) every candidate beyond `cutoff()` contributes exactly `0.0` (true by
+   construction — IEEE754 `x + 0.0 == x` exactly, so dropping them changes nothing) and
+   (b) every candidate that *does* contribute is visited in the same relative order the
+   old ascending scan visited it (floating-point addition is not associative, so
+   `core::CellList`'s bin-traversal order is explicitly sorted back to index order
+   before use). Verified directly (`tests/validation/test_gcmc_cell_list_bit_identical.cc`,
+   `REQUIRE(a == b)`, not a tolerance, across cubic and triclinic cells and guest
+   occupancy up to CO2/IRMOF-1's real ~127-molecule scale) and end-to-end (the whole
+   known-deviation test reproduces bit-identical loading values before and after, same
+   seed). On *this* test, though, it made **no measurable difference** — guest occupancy
+   here tops out around 23 molecules, too few for an O(N)-vs-cell-list distinction to
+   show up against a 424-atom framework scan. It matters for the higher-occupancy
+   charged CO2/IRMOF-1 system and is real, validated infrastructure either way (CLAUDE.md
+   section 3's "cash the bet" on `core/neighbor` actually being used by an engine).
+
+2. **A rigid-framework guest-host energy grid was built, validated, and *not* adopted**
+   (`engines/monte_carlo/framework_energy_grid.hpp`, `FrameworkEnergyGrid`): one
+   trilinearly-interpolated energy table per guest LJ species, replacing the
+   O(frameworkCount) direct scan with an O(1) lookup — the literal "tabulate the guest-
+   host field once" idea. It works (a real accuracy-vs-spacing-vs-build-time sweep is in
+   `tests/validation/test_framework_energy_grid.cc`, with a raw-node cap
+   (`kEnergyCapKelvin = 1e5`) needed because a grid node landing near a framework atom's
+   core computes a real 1e17+ K raw LJ repulsion that a naive interpolation smears into
+   meaningless output — physically harmless to cap, since `exp(-1e5 / 298 K)` is already
+   indistinguishable from zero acceptance probability). But **measured, not assumed**: at
+   this exact 25.832 Å single-unit-cell system (12.0 Å cutoff, close to `L_perp/2`), a
+   spacing coarse enough to build quickly (0.5 Å, ~11 s) was *not* accurate enough — it
+   more than doubled this test's own tight self-consistency deviation past its 12% gate
+   (22.6%, vs. 3.4% without it) — and a spacing accurate enough to pass (0.2 Å) cost
+   **~165 s to build once**, over 5× this entire 4-point isotherm's *pre-optimization*
+   runtime. Root cause: a single unit cell with `cutoff ≈ L_perp/2` means nearly the
+   whole framework is "in range" of any point in the cell, so neither a cell list nor a
+   precomputed grid can avoid touching most of it — this is the same underlying
+   constraint the methane/IRMOF-1 known-deviation writeup and the CO2/IRMOF-1 supercell
+   already ran into (see `CLAUDE.md` section 0, defect 1). `FrameworkEnergyGrid` is real,
+   tested infrastructure (and `engines/monte_carlo/monte_carlo_engine.hpp`'s GCMC
+   constructor accepts one), scoped for systems where `cutoff << L` or where far more
+   total steps amortize the one-time build — not wired into this test's default path.
+
+3. **The actual fix, found from following the profile rather than the two techniques
+   above: `Lattice::minimumImageDisplacement` had a hidden orthorhombic fast path
+   available and wasn't using it.** IRMOF-1's cell is cubic (90°/90°/90°), but the
+   general-purpose triclinic algorithm (a 125-candidate search around a Gauss-reduced
+   basis — necessary for a genuinely skewed cell, see CLAUDE.md's Ewald/triclinic
+   warnings) was running unconditionally, on every call, for every cell shape. An
+   orthorhombic cell's minimum image is *exact* via independent per-axis rounding — no
+   search needed, because the axes are mutually orthogonal; this does not generalize to
+   triclinic cells, which is exactly why the general path still exists and is still used
+   for non-orthorhombic input. Detecting "orthorhombic" needs a tolerance, not an exact
+   zero check: a real CIF-derived 90°/90°/90° cell's off-diagonal matrix entries are
+   never exactly `0.0` (`cos(π/2) ≈ 6.1×10⁻¹⁷` in double precision, not `0`), so the
+   check is relative-tolerance-based (`1e-9`, chosen to comfortably absorb that
+   trig-rounding noise while staying ~1e5x below the off-diagonal magnitude a cell even
+   0.01° off orthorhombic would have) — validated explicitly on a genuinely-if-barely
+   skewed (89.5°) cell to confirm it still takes, and is still correct on, the general
+   path (`tests/validation/test_lattice_minimum_image.cc`).
+
+**Result**: the fast path alone took the 4-point isotherm from 32.0 s to **3.97 s**
+(Release; 58 s → 37.1 s Debug) — under the 5 s target — with **bit-identical** computed
+loading values before and after (same seed, same output to every printed digit): this is
+an exact optimization, not an approximation, so it needed no known-deviation-baseline
+re-justification. `benchmarks/bench_gcmc_ch4_irmof1.cc` tracks a synthetic-system
+equivalent of this workload as an ongoing CI-checked baseline (`scripts/
+run_benchmarks.sh`, CLAUDE.md's >5% regression gate).
 
 ## What's declared but not yet implemented
 

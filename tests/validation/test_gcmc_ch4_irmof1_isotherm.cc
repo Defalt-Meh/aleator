@@ -99,6 +99,22 @@ TEST_CASE("GCMC-computed CH4/IRMOF-1 loading at low pressure is self-consistent 
     auto forceField = std::make_shared<const LennardJones>(ljParameters, cutoff,
                                                              LennardJonesTruncation::Shifted);
 
+    // CLAUDE.md section 5 performance milestone: FrameworkEnergyGrid (an
+    // O(1)-interpolation replacement for the direct O(frameworkCount)
+    // guest-host scan) was evaluated for this exact system and NOT adopted
+    // here -- see tests/validation/test_framework_energy_grid.cc and
+    // README.md's performance section for the measured reason: at this
+    // 25.832 Ang single-unit-cell system's cutoff (12.0 Ang, close to
+    // L_perp/2), a grid coarse enough to build quickly is not accurate
+    // enough to hold this test's own tight self-consistency gate (0.5 Ang
+    // spacing measured on this system: relative difference 22.6% vs. the
+    // required <12%), and a grid fine enough to pass it (0.2 Ang) costs
+    // ~165s to build once -- more than 5x the pre-optimization runtime of
+    // the full 4-point known-deviation isotherm
+    // (tests/known_deviation/test_gcmc_ch4_irmof1_known_deviation.cc). The
+    // guest-guest core::CellList wiring below (via MonteCarloEngine's
+    // internal moleculeDispersionEnergy) still applies and is exact, not an
+    // approximation.
     MoleculeSpecies ch4;
     ch4.sites.push_back({0.0, 0.0, 0.0, ch4SpeciesIndex, /*charge=*/0.0, /*mass=*/16.04246});
 

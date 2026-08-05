@@ -183,6 +183,14 @@ GcmcRunConfig loadGcmcConfig(const std::filesystem::path& file) {
     cfg.equilibrationSteps = static_cast<std::size_t>(equilibrationSteps);
     cfg.productionSteps = static_cast<std::size_t>(productionSteps);
 
+    if (gcmc["energy_grid_spacing_angstrom"].node() != nullptr) {
+        cfg.energyGridSpacingAngstrom = requireValue<double>(
+            gcmc, "energy_grid_spacing_angstrom", filePath, "gcmc.energy_grid_spacing_angstrom",
+            "a number");
+        requirePositive(*cfg.energyGridSpacingAngstrom, filePath,
+                         "gcmc.energy_grid_spacing_angstrom", gcmc, "energy_grid_spacing_angstrom");
+    }
+
     const auto* frameworkLjArray = gcmc["framework_lj"].as_array();
     if (frameworkLjArray == nullptr || frameworkLjArray->empty()) {
         const auto [line, column] = locationOf(gcmc["framework_lj"].node(), gcmc);

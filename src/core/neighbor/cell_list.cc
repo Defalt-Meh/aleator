@@ -42,7 +42,32 @@ CellList::CellCoord CellList::wrap(CellCoord c, CellCoord offset) const noexcept
     return {wrapAxis(c.x + offset.x, nx_), wrapAxis(c.y + offset.y, ny_), wrapAxis(c.z + offset.z, nz_)};
 }
 
-void CellList::build(const ParticleData& particles, const Lattice& lattice, double radius) {
+namespace {
+int clampBin(int bin, int n) {
+    if (bin < 0) {
+        return 0;
+    }
+    if (bin >= n) {
+        return n - 1;
+    }
+    return bin;
+}
+} // namespace
+
+CellList::CellCoord CellList::cellCoordFor(const Lattice& lattice,
+                                            const std::array<double, 3>& position) const noexcept {
+    auto fractional = lattice.cartesianToFractional(position);
+    for (double& f : fractional) {
+        f -= std::floor(f);
+    }
+    const int bx = clampBin(static_cast<int>(fractional[0] * static_cast<double>(nx_)), nx_);
+    const int by = clampBin(static_cast<int>(fractional[1] * static_cast<double>(ny_)), ny_);
+    const int bz = clampBin(static_cast<int>(fractional[2] * static_cast<double>(nz_)), nz_);
+    return {bx, by, bz};
+}
+
+void CellList::build(const ParticleData& particles, const Lattice& lattice, double radius,
+                      std::size_t startIndex) {
     if (!(radius > 0.0)) {
         throw std::invalid_argument("CellList::build: radius must be positive");
     }
@@ -59,26 +84,9 @@ void CellList::build(const ParticleData& particles, const Lattice& lattice, doub
                      static_cast<std::size_t>(nz_),
                  {});
 
-    auto clampBin = [](int bin, int n) {
-        if (bin < 0) {
-            return 0;
-        }
-        if (bin >= n) {
-            return n - 1;
-        }
-        return bin;
-    };
-
-    for (std::size_t i = 0; i < particles.size(); ++i) {
-        auto fractional =
-            lattice.cartesianToFractional({particles.x[i], particles.y[i], particles.z[i]});
-        for (double& f : fractional) {
-            f -= std::floor(f);
-        }
-        const int bx = clampBin(static_cast<int>(fractional[0] * static_cast<double>(nx_)), nx_);
-        const int by = clampBin(static_cast<int>(fractional[1] * static_cast<double>(ny_)), ny_);
-        const int bz = clampBin(static_cast<int>(fractional[2] * static_cast<double>(nz_)), nz_);
-        bins_[static_cast<std::size_t>(flatten({bx, by, bz}))].push_back(i);
+    for (std::size_t i = startIndex; i < particles.size(); ++i) {
+        const CellCoord coord = cellCoordFor(lattice, {particles.x[i], particles.y[i], particles.z[i]});
+        bins_[static_cast<std::size_t>(flatten(coord))].push_back(i);
     }
 
     int countX = 0;

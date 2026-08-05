@@ -40,7 +40,10 @@ public:
     /// object was at fault.
     [[nodiscard]] virtual std::string name() const = 0;
 
-    /// Capability query for computeParticleEnergy(): a consumer (e.g.
+    /// Capability query for computeParticleEnergy() AND
+    /// computeParticleEnergyOverCandidates() (the same per-particle trial
+    /// energy, full-scan vs. candidate-list forms — a force field that
+    /// implements one is expected to implement both): a consumer (e.g.
     /// MonteCarloEngine, which needs single-particle trial-move energies)
     /// must check this at construction and reject a force field that
     /// answers false, rather than discovering the NotImplemented default
@@ -93,6 +96,31 @@ public:
         (void)lattice;
         (void)excludedIndices;
         throw aleator::NotImplemented("ForceField::computeParticleEnergy");
+    }
+
+    /// Same quantity as computeParticleEnergy (energy of `index` against
+    /// every particle in `candidateIndices`, minus `excludedIndices`), but
+    /// summed only over `candidateIndices` rather than every particle in
+    /// `particles`. Exact — not an approximation — as long as
+    /// `candidateIndices` is a superset of every particle actually within
+    /// this force field's cutoff of `index` (any candidate beyond cutoff
+    /// contributes exactly 0, the same as it would in the full scan): the
+    /// standard neighbor-structure-accelerated form of the same sum, e.g.
+    /// via core::CellList::forEachIndexNear(). Gated by the same
+    /// supportsSingleParticleEnergy() capability query as
+    /// computeParticleEnergy() — a force field that implements one is
+    /// expected to implement both (CLAUDE.md invariant #10); default throws
+    /// NotImplemented for the same reason computeParticleEnergy()'s does.
+    [[nodiscard]] virtual double computeParticleEnergyOverCandidates(
+        std::size_t index, const core::ParticleData& particles, const core::Lattice& lattice,
+        const std::vector<std::size_t>& candidateIndices,
+        const std::vector<std::size_t>& excludedIndices = {}) const {
+        (void)index;
+        (void)particles;
+        (void)lattice;
+        (void)candidateIndices;
+        (void)excludedIndices;
+        throw aleator::NotImplemented("ForceField::computeParticleEnergyOverCandidates");
     }
 };
 

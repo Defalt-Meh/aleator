@@ -7,6 +7,8 @@
 #include "core/geometry/lattice.hpp"
 #include "core/math/counter_based_rng.hpp"
 #include "core/math/particle_data.hpp"
+#include "core/neighbor/cell_list.hpp"
+#include "engines/monte_carlo/framework_energy_grid.hpp"
 #include "engines/monte_carlo/molecule_species.hpp"
 #include "forcefield/electrostatics/ewald.hpp"
 #include "forcefield/electrostatics/ewald_incremental_state.hpp"
@@ -65,13 +67,26 @@ public:
     /// 0. Every adsorbate site's charge, plus `frameworkParticles`'
     /// charges, must sum to (numerically) zero; checked at construction
     /// and per-species, not discovered mid-run.
+    ///
+    /// `frameworkEnergyGrid`, if given, replaces the direct O(frameworkCount)
+    /// guest-host dispersion scan with an O(1) trilinear-interpolation
+    /// lookup (CLAUDE.md section 5 performance milestone) — see
+    /// framework_energy_grid.hpp. It must have been built against this same
+    /// `frameworkParticles`/`lattice`/`forceField` and cover every LJ
+    /// species `species` uses; unlike `electrostatics`, this is an
+    /// approximation, not an exact refactor (see that class's doc comment
+    /// for the measured accuracy-vs-spacing tradeoff). Building one is real,
+    /// amortizable work — callers running several MonteCarloEngines against
+    /// the same framework (e.g. an isotherm's pressure points) should build
+    /// it once and share it, not rebuild it per engine.
     MonteCarloEngine(core::ParticleData frameworkParticles, core::Lattice lattice,
                       std::shared_ptr<const forcefield::ForceField> forceField,
                       std::unique_ptr<core::CounterBasedRng> rng, double temperatureKelvin,
                       MoleculeSpecies species, double fugacityPascal,
                       double maxTranslationDisplacementAngstrom = 1.5,
                       double maxRotationAngleRadians = 0.5,
-                      std::shared_ptr<const forcefield::Ewald> electrostatics = nullptr);
+                      std::shared_ptr<const forcefield::Ewald> electrostatics = nullptr,
+                      std::shared_ptr<const FrameworkEnergyGrid> frameworkEnergyGrid = nullptr);
 
     /// Runs `numSteps` MC steps. For Ensemble::Gcmc, each step picks one of
     /// {translation, rotation, insertion, deletion} uniformly at random and
@@ -133,6 +148,27 @@ private:
     double maxRotationAngle_ = 0.5;
     std::vector<std::vector<std::size_t>> molecules_;
 
+    // Guest-guest neighbor acceleration (CLAUDE.md section 5 performance
+    // milestone): forceField_'s dispersion cutoff, fetched once at
+    // construction (see monte_carlo_engine.cc for why this needs a concrete
+    // LennardJones rather than living on the ForceField interface).
+    // frameworkIndices_ is the fixed candidate list {0, ..., frameworkCount_
+    // - 1}, precomputed once since it never changes. guestCellList_ is
+    // rebuilt from the current particles_/molecules_ state after every
+    // accepted move (particles_ is otherwise immutable between accepts), and
+    // queried per trial via CellList::forEachIndexNear -- see
+    // moleculeDispersionEnergy()'s doc comment for why the candidates it
+    // gathers are sorted back into ascending index order before use.
+    double guestCellListRadius_ = 0.0;
+    std::vector<std::size_t> frameworkIndices_;
+    core::CellList guestCellList_;
+
+    // Optional O(1) replacement for the framework-direct-scan portion of
+    // moleculeDispersionEnergy() -- null means "still scan frameworkIndices_
+    // directly" (backward compatible; e.g. the charged-GCMC path doesn't use
+    // this yet, see CLAUDE.md section 0).
+    std::shared_ptr<const FrameworkEnergyGrid> frameworkEnergyGrid_;
+
     // Charged-GCMC state (populated only when the GCMC constructor is
     // given a non-null `electrostatics`; ewaldState_ is null otherwise, and
     // every electrostatics-related branch is skipped).
@@ -145,6 +181,22 @@ private:
     void attemptInsertion();
     void attemptDeletion();
     void removeMolecule(std::size_t moleculeIndex);
+
+    /// Dispersion (forceField_) energy of `sites` against everything else,
+    /// via a direct scan against the framework and a CellList-accelerated
+    /// scan against other guest molecules -- the hot-path replacement for
+    /// the old full-O(N)-scan moleculeInteractionEnergy() (still used
+    /// as-is by widomInsertionHenryCoefficient(), which has no "other
+    /// guests" to accelerate against). See the .cc for the bit-identical
+    /// argument.
+    [[nodiscard]] double moleculeDispersionEnergy(const std::vector<std::size_t>& sites) const;
+
+    /// Rebuilds guestCellList_ from the current particles_/molecules_ state.
+    /// particles_ only changes when a move is accepted, so this only needs
+    /// to run once per acceptance (called at the end of every accept branch
+    /// in attemptTranslation/Rotation/Insertion/Deletion), plus once at
+    /// construction for the initial (empty-guest) state.
+    void rebuildGuestCellList();
 
     /// Real-space + reciprocal/self/exclusion Coulomb energy of `sites`
     /// (a rigid molecule's site indices in `particles_`) against

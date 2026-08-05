@@ -1,6 +1,7 @@
 add_executable(aleator_bench
     bench_neighbor_list.cc
     bench_vector_sum.cc
+    bench_gcmc_ch4_irmof1.cc
 )
 aleator_configure_target(aleator_bench)
 
@@ -10,6 +11,8 @@ target_link_libraries(aleator_bench
         benchmark::benchmark_main
         aleator::core::math
         aleator::core::neighbor
+        aleator::engines::monte_carlo
+        aleator::forcefield::pairwise
 )
 
 # ALEATOR_BENCH_NATIVE scopes -march=native to this executable only (set by

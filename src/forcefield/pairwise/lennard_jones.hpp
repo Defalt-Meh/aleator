@@ -89,6 +89,20 @@ public:
         std::size_t index, const core::ParticleData& particles, const core::Lattice& lattice,
         const std::vector<std::size_t>& excludedIndices = {}) const override;
 
+    /// Same per-pair math as computeParticleEnergy (identical calls to
+    /// pairEnergy()/mixedParameters()/Lattice::minimumImageDisplacement, so
+    /// the two are bit-identical whenever `candidateIndices` happens to be
+    /// {0, ..., particles.size()-1}\{index}), but summed only over
+    /// `candidateIndices` instead of every particle. Exact as long as
+    /// `candidateIndices` is a superset of every j actually within
+    /// cutoff() of `index` (pairEnergy() already returns 0 beyond cutoff()
+    /// for anything included that isn't) — e.g. the output of
+    /// core::CellList::forEachIndexNear() built with radius >= cutoff().
+    [[nodiscard]] double computeParticleEnergyOverCandidates(
+        std::size_t index, const core::ParticleData& particles, const core::Lattice& lattice,
+        const std::vector<std::size_t>& candidateIndices,
+        const std::vector<std::size_t>& excludedIndices = {}) const override;
+
     /// Instantaneous pairwise virial W = -sum_{i<j} r_ij * dV/dr|_{r_ij}
     /// over `neighbors.pairs()` (same sign/definition NIST's reference
     /// table uses for W_pair). Related to the configurational pressure

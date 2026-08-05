@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <vector>
 
@@ -25,9 +26,19 @@ namespace aleator::core {
 class CellList {
 public:
     /// Rebuilds the grid for `particles` under `lattice`, sized so cell
-    /// extents are >= `radius` along every axis. Throws
+    /// extents are >= `radius` along every axis. Only particles with index
+    /// >= `startIndex` are binned (default: all of them) — the returned
+    /// indices are still global indices into `particles`, unshifted, so a
+    /// caller can build a grid over a subrange (e.g. only the mobile/guest
+    /// tail of a combined framework+adsorbate ParticleData, per CLAUDE.md
+    /// section 3/5: rigid-framework GCMC's guest-guest term is the part of
+    /// the energy that genuinely needs a neighbor structure — the
+    /// guest-host term is handled separately, see
+    /// engines/monte_carlo/monte_carlo_engine.cc) without a second
+    /// ParticleData or an index-remapping step. Throws
     /// std::invalid_argument if `radius` is not positive.
-    void build(const ParticleData& particles, const Lattice& lattice, double radius);
+    void build(const ParticleData& particles, const Lattice& lattice, double radius,
+               std::size_t startIndex = 0);
 
     /// Invokes `callback(i, j)` — with i < j, both std::size_t particle
     /// indices — exactly once for every unordered pair of distinct
@@ -59,6 +70,29 @@ public:
         }
     }
 
+    /// Invokes `callback(j)` for every binned index whose cell is the same
+    /// as or (index-)adjacent to the cell containing `position` under this
+    /// grid's periodic wraparound — the same candidate-superset guarantee
+    /// as forEachCandidatePair(), specialized to a single arbitrary query
+    /// point instead of every binned particle's own position. `position`
+    /// need not correspond to any particle actually in the grid (the usual
+    /// case: an MC trial move's proposed new site position). `lattice` must
+    /// be the same lattice passed to the last build() call — this class
+    /// does not store it, matching VerletList's build-time-lattice
+    /// contract, since a caller normally already has it in hand and storing
+    /// a second copy here would be redundant state to keep in sync.
+    template <typename Callback>
+    void forEachIndexNear(const Lattice& lattice, const std::array<double, 3>& position,
+                           Callback&& callback) const {
+        const CellCoord center = cellCoordFor(lattice, position);
+        for (const CellCoord& offset : offsets_) {
+            const int targetLinear = flatten(wrap(center, offset));
+            for (const std::size_t j : bins_[static_cast<std::size_t>(targetLinear)]) {
+                callback(j);
+            }
+        }
+    }
+
     [[nodiscard]] int cellCountX() const noexcept { return nx_; }
     [[nodiscard]] int cellCountY() const noexcept { return ny_; }
     [[nodiscard]] int cellCountZ() const noexcept { return nz_; }
@@ -78,6 +112,8 @@ private:
         return {x, y, z};
     }
     [[nodiscard]] CellCoord wrap(CellCoord c, CellCoord offset) const noexcept;
+    [[nodiscard]] CellCoord cellCoordFor(const Lattice& lattice,
+                                          const std::array<double, 3>& position) const noexcept;
 
     int nx_ = 1;
     int ny_ = 1;

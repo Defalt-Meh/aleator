@@ -100,7 +100,46 @@ std::array<Vec3, 3> greedyReduce(std::array<Vec3, 3> v) {
     return v;
 }
 
+/// True if `matrix` is diagonal to within floating-point noise: every
+/// off-diagonal entry is negligible relative to the diagonal scale of its
+/// row/column. The tolerance (1e-9, relative) is chosen to comfortably
+/// absorb trig round-off (e.g. cos(pi/2) evaluates to ~6.1e-17, not exactly
+/// 0.0, so a real 90/90/90 CIF cell's off-diagonal terms are never exactly
+/// zero) while staying many orders of magnitude below any genuine skew --
+/// even a cell off by a hundredth of a degree from 90 has off-diagonal
+/// terms around 1e-4 relative, ~1e5x this threshold. CLAUDE.md invariant
+/// #6/section 10's named failure mode ("minimum image convention assuming
+/// orthorhombic -- silently wrong for triclinic MOFs") is exactly why this
+/// is a tolerance check, not an assumption: a genuinely triclinic cell
+/// (however close to orthorhombic) must and does fail it.
+bool computeIsOrthorhombic(const std::array<std::array<double, 3>, 3>& matrix) {
+    constexpr double kRelativeTolerance = 1e-9;
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            if (i == j) {
+                continue;
+            }
+            const double scale = std::max({std::abs(matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(i)]),
+                                             std::abs(matrix[static_cast<std::size_t>(j)][static_cast<std::size_t>(j)]),
+                                             1.0});
+            if (std::abs(matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)]) >
+                kRelativeTolerance * scale) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace
+
+bool Lattice::isOrthorhombic() const {
+    if (!isOrthorhombicCached_) {
+        isOrthorhombic_ = computeIsOrthorhombic(matrix_);
+        isOrthorhombicCached_ = true;
+    }
+    return isOrthorhombic_;
+}
 
 const std::array<std::array<double, 3>, 3>& Lattice::reducedBasis() const {
     if (!reducedBasisCached_) {
@@ -152,6 +191,21 @@ std::array<double, 3> Lattice::minimumImageDisplacement(const std::array<double,
     }
 
     const Vec3 d = sub(toVec3(b), toVec3(a));
+
+    // Exact O(1) fast path for orthorhombic cells (CLAUDE.md section 5
+    // performance milestone) -- see isOrthorhombic()'s doc comment. Minimum
+    // image along mutually orthogonal axes is independent per axis: no
+    // search is needed or more correct than this, unlike the general
+    // triclinic case below.
+    if (isOrthorhombic()) {
+        Vec3 wrapped = d;
+        for (int axis = 0; axis < 3; ++axis) {
+            const double length = matrix_[static_cast<std::size_t>(axis)][static_cast<std::size_t>(axis)];
+            wrapped[static_cast<std::size_t>(axis)] -=
+                length * std::round(wrapped[static_cast<std::size_t>(axis)] / length);
+        }
+        return {wrapped[0], wrapped[1], wrapped[2]};
+    }
 
     // Search around a Gauss-reduced basis rather than the raw (possibly
     // badly-conditioned) input matrix: reduction is a unimodular change of

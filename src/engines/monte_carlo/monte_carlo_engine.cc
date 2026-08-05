@@ -4,11 +4,13 @@
 #include <array>
 #include <cmath>
 #include <numbers>
+#include <numeric>
 #include <stdexcept>
 #include <utility>
 
 #include "core/exceptions.hpp"
 #include "engines/monte_carlo/gcmc_acceptance.hpp"
+#include "forcefield/pairwise/lennard_jones.hpp"
 
 namespace aleator::engines {
 
@@ -144,7 +146,8 @@ MonteCarloEngine::MonteCarloEngine(core::ParticleData frameworkParticles, core::
                                     double temperatureKelvin, MoleculeSpecies species,
                                     double fugacityPascal, double maxTranslationDisplacementAngstrom,
                                     double maxRotationAngleRadians,
-                                    std::shared_ptr<const forcefield::Ewald> electrostatics)
+                                    std::shared_ptr<const forcefield::Ewald> electrostatics,
+                                    std::shared_ptr<const FrameworkEnergyGrid> frameworkEnergyGrid)
     : ensemble_(Ensemble::Gcmc),
       particles_(std::move(frameworkParticles)),
       lattice_(lattice),
@@ -156,6 +159,7 @@ MonteCarloEngine::MonteCarloEngine(core::ParticleData frameworkParticles, core::
       fugacityInternal_(fugacityPascal * kPascalToInternal),
       maxTranslation_(maxTranslationDisplacementAngstrom),
       maxRotationAngle_(maxRotationAngleRadians),
+      frameworkEnergyGrid_(std::move(frameworkEnergyGrid)),
       electrostatics_(std::move(electrostatics)) {
     if (species_.sites.empty()) {
         throw std::invalid_argument("MonteCarloEngine: GCMC species must have at least one site");
@@ -182,6 +186,32 @@ MonteCarloEngine::MonteCarloEngine(core::ParticleData frameworkParticles, core::
             "This is not yet implemented for this force field -- see "
             "CLAUDE.md section 0.");
     }
+
+    // CLAUDE.md section 5 performance milestone: guest-guest interactions
+    // are accelerated via a core::CellList (see moleculeDispersionEnergy()),
+    // which needs a fixed cutoff radius to size its grid. That's a narrower
+    // requirement than supportsSingleParticleEnergy() alone -- a force field
+    // is not required to have a single scalar cutoff() in general (Ewald's
+    // real-space term doesn't hard-truncate the way LennardJones does) -- so
+    // it's checked here explicitly via the concrete type, rather than added
+    // to the ForceField interface for every force field to satisfy.
+    // dynamic_cast, not a silent assumption: an unsupported concrete type
+    // throws immediately, by name, same as the capability check above
+    // (CLAUDE.md invariant #10), instead of being discovered as a crash or
+    // wrong answer once run() starts moving molecules.
+    const auto* lennardJonesForceField =
+        dynamic_cast<const forcefield::LennardJones*>(forceField_.get());
+    if (lennardJonesForceField == nullptr) {
+        throw std::invalid_argument(
+            "MonteCarloEngine: GCMC's guest-guest neighbor acceleration needs a force "
+            "field with a single fixed cutoff radius; '" +
+            forceField_->name() + "' is not a supported concrete type for this.");
+    }
+    guestCellListRadius_ = lennardJonesForceField->cutoff();
+    frameworkIndices_.resize(frameworkCount_);
+    std::iota(frameworkIndices_.begin(), frameworkIndices_.end(), std::size_t{0});
+    rebuildGuestCellList();
+
     if (electrostatics_ != nullptr) {
         // Every adsorbate site's charge must sum to (numerically) zero:
         // GCMC inserts/deletes whole molecules one at a time, and if a
@@ -220,6 +250,61 @@ double MonteCarloEngine::moleculeElectrostaticRealSpaceEnergy(
         return 0.0;
     }
     return electrostaticRealSpaceInteractionEnergy(*electrostatics_, particles_, lattice_, sites);
+}
+
+// CLAUDE.md section 5 performance milestone: replaces the old full-O(N)-scan
+// moleculeInteractionEnergy(*forceField_, particles_, lattice_, sites) on
+// the GCMC hot path (translation/rotation/insertion/deletion) with:
+//  (a) the guest-host (framework) contribution, either an O(1)
+//      trilinear-interpolation lookup via frameworkEnergyGrid_ (when
+//      given -- see framework_energy_grid.hpp for the accuracy-vs-spacing
+//      tradeoff; this part is NOT bit-identical to the direct scan, unlike
+//      (b)) or, when frameworkEnergyGrid_ is null, the original direct
+//      O(frameworkCount_) scan over frameworkIndices_;
+//  (b) the guest-guest contribution, found via guestCellList_ instead of
+//      scanning the whole particles_ array.
+//
+// (b) alone (frameworkEnergyGrid_ == nullptr) is bit-identical to the old
+// full scan by construction, not merely close: LennardJones::pairEnergy()
+// returns exactly 0.0 for any pair beyond cutoff(), and IEEE754 addition has
+// x + 0.0 == x bit-for-bit -- so the old scan's result is unchanged by
+// *dropping* any candidate outside cutoff() from the sum, as long as every
+// candidate that DOES contribute a nonzero term is visited in the same
+// relative order as the old ascending (j = 0, 1, ..., N-1) scan visited it
+// (floating-point addition is not associative, so reordering nonzero terms,
+// not just omitting zero ones, can change the last bit). frameworkIndices_
+// is already in ascending order; guestCandidates is explicitly sorted back
+// into ascending order below (CellList's bin traversal order is not index
+// order) precisely to preserve that. See
+// tests/validation/test_gcmc_cell_list_bit_identical.cc.
+double MonteCarloEngine::moleculeDispersionEnergy(const std::vector<std::size_t>& sites) const {
+    double energy = 0.0;
+    for (std::size_t s : sites) {
+        if (frameworkEnergyGrid_ != nullptr) {
+            energy += frameworkEnergyGrid_->interpolate(
+                particles_.species[s], {particles_.x[s], particles_.y[s], particles_.z[s]});
+        }
+
+        std::vector<std::size_t> guestCandidates;
+        guestCellList_.forEachIndexNear(
+            lattice_, {particles_.x[s], particles_.y[s], particles_.z[s]},
+            [&](std::size_t j) { guestCandidates.push_back(j); });
+        std::sort(guestCandidates.begin(), guestCandidates.end());
+
+        std::vector<std::size_t> candidates;
+        if (frameworkEnergyGrid_ == nullptr) {
+            candidates = frameworkIndices_;
+        }
+        candidates.insert(candidates.end(), guestCandidates.begin(), guestCandidates.end());
+
+        energy +=
+            forceField_->computeParticleEnergyOverCandidates(s, particles_, lattice_, candidates, sites);
+    }
+    return energy;
+}
+
+void MonteCarloEngine::rebuildGuestCellList() {
+    guestCellList_.build(particles_, lattice_, guestCellListRadius_, frameworkCount_);
 }
 
 void MonteCarloEngine::maybeResyncEwald() {
@@ -273,7 +358,7 @@ void MonteCarloEngine::attemptTranslation() {
         static_cast<std::size_t>(rng_->nextUniform() * static_cast<double>(molecules_.size()));
     const auto& sites = molecules_[moleculeIndex];
 
-    const double uBefore = moleculeInteractionEnergy(*forceField_, particles_, lattice_, sites);
+    const double uBefore = moleculeDispersionEnergy(sites);
     const double electroBefore = moleculeElectrostaticRealSpaceEnergy(sites);
     const auto oldChargedSites =
         ewaldState_ != nullptr ? chargedSitesOf(particles_, sites) : std::vector<forcefield::ChargedSite>{};
@@ -288,7 +373,7 @@ void MonteCarloEngine::attemptTranslation() {
         setPosition(particles_, s, add(original.back(), delta));
     }
 
-    const double uAfter = moleculeInteractionEnergy(*forceField_, particles_, lattice_, sites);
+    const double uAfter = moleculeDispersionEnergy(sites);
     const double electroAfter = moleculeElectrostaticRealSpaceEnergy(sites);
     const auto newChargedSites =
         ewaldState_ != nullptr ? chargedSitesOf(particles_, sites) : std::vector<forcefield::ChargedSite>{};
@@ -302,6 +387,7 @@ void MonteCarloEngine::attemptTranslation() {
             ewaldState_->commitMove(oldChargedSites, newChargedSites);
             maybeResyncEwald();
         }
+        rebuildGuestCellList();
         return; // accepted, keep the new positions
     }
     for (std::size_t k = 0; k < sites.size(); ++k) {
@@ -317,7 +403,7 @@ void MonteCarloEngine::attemptRotation() {
         static_cast<std::size_t>(rng_->nextUniform() * static_cast<double>(molecules_.size()));
     const auto& sites = molecules_[moleculeIndex];
 
-    const double uBefore = moleculeInteractionEnergy(*forceField_, particles_, lattice_, sites);
+    const double uBefore = moleculeDispersionEnergy(sites);
     const double electroBefore = moleculeElectrostaticRealSpaceEnergy(sites);
     const auto oldChargedSites =
         ewaldState_ != nullptr ? chargedSitesOf(particles_, sites) : std::vector<forcefield::ChargedSite>{};
@@ -344,7 +430,7 @@ void MonteCarloEngine::attemptRotation() {
         setPosition(particles_, s, add(centroid, rotateAboutAxis(sub(p, centroid), axis, angle)));
     }
 
-    const double uAfter = moleculeInteractionEnergy(*forceField_, particles_, lattice_, sites);
+    const double uAfter = moleculeDispersionEnergy(sites);
     const double electroAfter = moleculeElectrostaticRealSpaceEnergy(sites);
     const auto newChargedSites =
         ewaldState_ != nullptr ? chargedSitesOf(particles_, sites) : std::vector<forcefield::ChargedSite>{};
@@ -358,6 +444,7 @@ void MonteCarloEngine::attemptRotation() {
             ewaldState_->commitMove(oldChargedSites, newChargedSites);
             maybeResyncEwald();
         }
+        rebuildGuestCellList();
         return;
     }
     for (std::size_t k = 0; k < sites.size(); ++k) {
@@ -391,8 +478,7 @@ void MonteCarloEngine::attemptInsertion() {
                                                   0.0, site.mass, site.charge, site.ljSpecies));
     }
 
-    const double dispersionDeltaU =
-        moleculeInteractionEnergy(*forceField_, particles_, lattice_, newSites);
+    const double dispersionDeltaU = moleculeDispersionEnergy(newSites);
     const double electroRealSpace = moleculeElectrostaticRealSpaceEnergy(newSites);
     const auto newChargedSites =
         ewaldState_ != nullptr ? chargedSitesOf(particles_, newSites) : std::vector<forcefield::ChargedSite>{};
@@ -411,6 +497,7 @@ void MonteCarloEngine::attemptInsertion() {
         }
         molecules_.push_back(std::move(newSites));
         maybeResyncEwald();
+        rebuildGuestCellList();
         return;
     }
     // Rejected: the trial sites were just appended at the very end of
@@ -428,7 +515,7 @@ void MonteCarloEngine::attemptDeletion() {
         static_cast<std::size_t>(rng_->nextUniform() * static_cast<double>(molecules_.size()));
     const auto& sites = molecules_[moleculeIndex];
 
-    const double uInteraction = moleculeInteractionEnergy(*forceField_, particles_, lattice_, sites);
+    const double uInteraction = moleculeDispersionEnergy(sites);
     const double electroRealSpace = moleculeElectrostaticRealSpaceEnergy(sites);
     const auto existingChargedSites =
         ewaldState_ != nullptr ? chargedSitesOf(particles_, sites) : std::vector<forcefield::ChargedSite>{};
@@ -451,6 +538,7 @@ void MonteCarloEngine::attemptDeletion() {
         }
         removeMolecule(moleculeIndex);
         maybeResyncEwald();
+        rebuildGuestCellList();
     }
 }
 

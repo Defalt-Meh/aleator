@@ -15,6 +15,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <utility>
 
 #include "core/geometry/lattice.hpp"
@@ -101,6 +102,97 @@ TEST_CASE("minimumImageDisplacement matches 27-image brute force on a moderately
         const double got = norm(d);
         const double expected = bruteForceMinimumImageDistance(m, a, b, 1);
         REQUIRE(std::abs(got - expected) < 1e-6);
+    }
+}
+
+TEST_CASE("minimumImageDisplacement matches 27-image brute force on a rectangular "
+          "(non-cubic) orthorhombic cell",
+          "[validation][geometry]") {
+    std::array<std::array<double, 3>, 3> m{};
+    m[0] = {14.0, 0.0, 0.0};
+    m[1] = {0.0, 9.0, 0.0};
+    m[2] = {0.0, 0.0, 20.0};
+    const Lattice lattice(m);
+
+    const std::array<std::pair<Vec3, Vec3>, 3> pairs{{
+        {Vec3{0.5, 0.5, 0.5}, Vec3{13.5, 8.5, 19.5}},
+        {Vec3{7.0, 4.5, 10.0}, Vec3{7.3, 4.7, 10.2}},
+        {Vec3{0.1, 8.9, 0.2}, Vec3{13.9, 0.1, 19.8}},
+    }};
+    for (const auto& [a, b] : pairs) {
+        const auto d = lattice.minimumImageDisplacement(a, b);
+        const double got = norm(d);
+        const double expected = bruteForceMinimumImageDistance(m, a, b, 1);
+        REQUIRE(std::abs(got - expected) < 1e-9);
+    }
+}
+
+TEST_CASE("minimumImageDisplacement takes the exact orthorhombic fast path for a "
+          "CIF-angle-derived 90/90/90 cell (cos(pi/2) != exactly 0.0)",
+          "[validation][geometry]") {
+    // Mirrors io/structure_io.cc's buildLattice(): a real 90/90/90 CIF cell
+    // built via cos/sin of the angles never has EXACTLY zero off-diagonal
+    // matrix entries (cos(pi/2) ~= 6.1e-17 in double precision) -- this is
+    // exactly the real-world case (e.g. IRMOF-1.cif) the orthorhombic fast
+    // path (CLAUDE.md section 5 performance milestone) must still detect.
+    constexpr double kLength = 25.832;
+    constexpr double kHalfPi = std::numbers::pi / 2.0;
+    const double cosA = std::cos(kHalfPi);
+    const double cosB = std::cos(kHalfPi);
+    const double cosG = std::cos(kHalfPi);
+    const double sinG = std::sin(kHalfPi);
+    REQUIRE(cosA != 0.0); // sanity: this really does exercise fp noise, not exact zero
+
+    std::array<std::array<double, 3>, 3> m{};
+    m[0] = {kLength, 0.0, 0.0};
+    m[1] = {kLength * cosG, kLength * sinG, 0.0};
+    const double cx = kLength * cosB;
+    const double cy = kLength * (cosA - cosB * cosG) / sinG;
+    const double czSquared = 1.0 - cosA * cosA - cosB * cosB - cosG * cosG + 2.0 * cosA * cosB * cosG;
+    m[2] = {cx, cy, kLength * std::sqrt(czSquared) / sinG};
+    const Lattice lattice(m);
+
+    const std::array<std::pair<Vec3, Vec3>, 3> pairs{{
+        {Vec3{0.5, 0.5, 0.5}, Vec3{25.3, 25.3, 25.3}},
+        {Vec3{1.0, 1.0, 1.0}, Vec3{24.8, 0.5, 0.5}},
+        {Vec3{12.9, 12.9, 12.9}, Vec3{13.0, 13.0, 13.0}},
+    }};
+    for (const auto& [a, b] : pairs) {
+        const auto d = lattice.minimumImageDisplacement(a, b);
+        const double got = norm(d);
+        const double expected = bruteForceMinimumImageDistance(m, a, b, 1);
+        REQUIRE(std::abs(got - expected) < 1e-9);
+    }
+}
+
+TEST_CASE("minimumImageDisplacement still uses the general (non-orthorhombic) path for a "
+          "cell that is only barely, genuinely skewed off 90 degrees",
+          "[validation][geometry]") {
+    // CLAUDE.md section 10's named failure mode: "minimum image convention
+    // assuming orthorhombic -- silently wrong for triclinic MOFs." A cell
+    // skewed by only 0.5 degrees off orthorhombic still has off-diagonal
+    // terms (~ L * cos(89.5 deg) ~ 0.0087 * L) roughly 1e7x this codebase's
+    // 1e-9 relative orthorhombic-detection tolerance -- comfortably outside
+    // it, so this must still take, and be correct on, the general path.
+    constexpr double kLength = 20.0;
+    const double gamma = (90.0 - 0.5) * std::numbers::pi / 180.0;
+    std::array<std::array<double, 3>, 3> m{};
+    m[0] = {kLength, 0.0, 0.0};
+    m[1] = {kLength * std::cos(gamma), kLength * std::sin(gamma), 0.0};
+    m[2] = {0.0, 0.0, kLength};
+    const Lattice lattice(m);
+    REQUIRE_FALSE(std::abs(m[1][0]) < 1e-9 * kLength); // sanity: genuinely off-diagonal
+
+    const std::array<std::pair<Vec3, Vec3>, 3> pairs{{
+        {Vec3{0.5, 0.5, 0.5}, Vec3{19.0, 19.0, 19.0}},
+        {Vec3{1.0, 1.0, 1.0}, Vec3{18.5, 0.5, 0.5}},
+        {Vec3{10.0, 10.0, 10.0}, Vec3{10.5, 10.5, 10.5}},
+    }};
+    for (const auto& [a, b] : pairs) {
+        const auto d = lattice.minimumImageDisplacement(a, b);
+        const double got = norm(d);
+        const double expected = bruteForceMinimumImageDistance(m, a, b, 1);
+        REQUIRE(std::abs(got - expected) < 1e-9);
     }
 }
 

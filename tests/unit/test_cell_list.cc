@@ -175,6 +175,114 @@ TEST_CASE("CellList handles zero and one particle without crashing", "[unit][nei
     REQUIRE(visits == 0);
 }
 
+namespace {
+
+/// Brute-force set of indices within `radius` of an arbitrary (not
+/// necessarily binned) query point, the ground truth for
+/// forEachIndexNear()'s coverage guarantee.
+std::set<std::size_t> bruteForceIndicesNear(const Lattice& lattice, const ParticleData& particles,
+                                             const std::array<double, 3>& queryPoint,
+                                             double radius) {
+    std::set<std::size_t> result;
+    for (std::size_t i = 0; i < particles.size(); ++i) {
+        const auto d = lattice.minimumImageDisplacement(
+            queryPoint, {particles.x[i], particles.y[i], particles.z[i]});
+        const double r = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (r <= radius) {
+            result.insert(i);
+        }
+    }
+    return result;
+}
+
+} // namespace
+
+TEST_CASE("CellList::forEachIndexNear finds every within-radius index for arbitrary query points",
+          "[unit][neighbor]") {
+    const Lattice lattice = makeLattice({20.0, 0.0, 0.0}, {0.0, 20.0, 0.0}, {0.0, 0.0, 20.0});
+    ParticleData particles = randomParticles(300, 55);
+    toCartesian(particles, lattice);
+
+    const double radius = 2.0;
+    CellList cellList;
+    cellList.build(particles, lattice, radius);
+
+    std::mt19937 queryRng(4242);
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    for (int trial = 0; trial < 50; ++trial) {
+        const auto queryPoint = lattice.fractionalToCartesian(
+            {unit(queryRng), unit(queryRng), unit(queryRng)});
+
+        std::vector<std::size_t> candidates;
+        cellList.forEachIndexNear(lattice, queryPoint,
+                                   [&](std::size_t j) { candidates.push_back(j); });
+        const std::set<std::size_t> candidateSet(candidates.begin(), candidates.end());
+        REQUIRE(candidateSet.size() == candidates.size()); // no duplicates
+
+        const auto truth = bruteForceIndicesNear(lattice, particles, queryPoint, radius);
+        for (std::size_t i : truth) {
+            INFO("missing candidate index " << i << " for trial " << trial);
+            REQUIRE(candidateSet.count(i) == 1);
+        }
+    }
+}
+
+TEST_CASE("CellList::forEachIndexNear is correct on a triclinic cell", "[unit][neighbor]") {
+    const Lattice lattice = makeLattice({15.0, 0.0, 0.0}, {4.0, 12.0, 0.0}, {2.5, 3.0, 11.0});
+    ParticleData particles = randomParticles(300, 321);
+    toCartesian(particles, lattice);
+
+    const double radius = 2.5;
+    CellList cellList;
+    cellList.build(particles, lattice, radius);
+
+    std::mt19937 queryRng(99);
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    for (int trial = 0; trial < 50; ++trial) {
+        const auto queryPoint =
+            lattice.fractionalToCartesian({unit(queryRng), unit(queryRng), unit(queryRng)});
+        std::vector<std::size_t> candidates;
+        cellList.forEachIndexNear(lattice, queryPoint,
+                                   [&](std::size_t j) { candidates.push_back(j); });
+        const std::set<std::size_t> candidateSet(candidates.begin(), candidates.end());
+
+        const auto truth = bruteForceIndicesNear(lattice, particles, queryPoint, radius);
+        for (std::size_t i : truth) {
+            INFO("missing candidate index " << i << " for trial " << trial);
+            REQUIRE(candidateSet.count(i) == 1);
+        }
+    }
+}
+
+TEST_CASE("CellList::build with startIndex only bins particles at or above startIndex",
+          "[unit][neighbor]") {
+    const Lattice lattice = makeLattice({20.0, 0.0, 0.0}, {0.0, 20.0, 0.0}, {0.0, 0.0, 20.0});
+    ParticleData particles = randomParticles(300, 7);
+    toCartesian(particles, lattice);
+
+    constexpr std::size_t kStartIndex = 200;
+    CellList cellList;
+    cellList.build(particles, lattice, 2.0, kStartIndex);
+
+    for (std::size_t i = 0; i < particles.size(); ++i) {
+        std::vector<std::size_t> candidates;
+        cellList.forEachIndexNear(lattice, {particles.x[i], particles.y[i], particles.z[i]},
+                                   [&](std::size_t j) { candidates.push_back(j); });
+        for (std::size_t j : candidates) {
+            REQUIRE(j >= kStartIndex);
+        }
+    }
+    // The particle's own bin, queried at its own position, must include
+    // itself whenever its index is >= kStartIndex (sanity check that
+    // startIndex didn't drop everything).
+    std::vector<std::size_t> selfCandidates;
+    cellList.forEachIndexNear(
+        lattice, {particles.x[250], particles.y[250], particles.z[250]},
+        [&](std::size_t j) { selfCandidates.push_back(j); });
+    REQUIRE(std::find(selfCandidates.begin(), selfCandidates.end(), std::size_t{250}) !=
+            selfCandidates.end());
+}
+
 TEST_CASE("CellList::build rejects a non-positive radius", "[unit][neighbor]") {
     const Lattice lattice = makeLattice({10.0, 0.0, 0.0}, {0.0, 10.0, 0.0}, {0.0, 0.0, 10.0});
     ParticleData particles = randomParticles(10, 1);

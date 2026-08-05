@@ -103,6 +103,21 @@ private:
     mutable std::array<std::array<double, 3>, 3> reducedBasis_{};
 
     [[nodiscard]] const std::array<std::array<double, 3>, 3>& reducedBasis() const;
+
+    // CLAUDE.md section 5 performance milestone: minimumImageDisplacement()
+    // profiled at >90% of a real GCMC run's total time (see README.md's
+    // performance section), almost entirely inside the 125-candidate
+    // triclinic search below -- work that is provably unnecessary whenever
+    // matrix_ is (to within floating-point noise) diagonal: an
+    // orthorhombic cell's minimum image is exact via independent per-axis
+    // rounding, no search needed, because the axes are mutually orthogonal
+    // (this does NOT generalize to triclinic cells -- that's the whole
+    // reason the general path exists). Cached lazily, same rationale and
+    // thread-safety caveat as reducedBasis_.
+    mutable bool isOrthorhombicCached_ = false;
+    mutable bool isOrthorhombic_ = false;
+
+    [[nodiscard]] bool isOrthorhombic() const;
 };
 
 } // namespace aleator::core

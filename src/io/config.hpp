@@ -83,6 +83,19 @@ struct GcmcConfig {
     std::size_t productionSteps = 20'000;
     std::vector<GcmcFrameworkSpecies> frameworkLennardJones;
     GcmcAdsorbate adsorbate;
+
+    /// CLAUDE.md section 5 performance milestone: grid spacing (Å) for the
+    /// O(1)-interpolation guest-host energy field (engines/monte_carlo/
+    /// framework_energy_grid.hpp), replacing the direct O(frameworkCount)
+    /// scan. Unset (the default) means "don't build one -- use the direct
+    /// scan", not "use some implicit spacing": this is a real accuracy/
+    /// speed tradeoff (see FrameworkEnergyGrid's doc comment and
+    /// tests/validation/test_framework_energy_grid.cc's measured
+    /// spacing-vs-accuracy-vs-build-time sweep, and README.md), so it is
+    /// opt-in rather than silently changed under an existing config
+    /// (CLAUDE.md invariant #11: a key the user didn't set must not change
+    /// what their run computes).
+    std::optional<double> energyGridSpacingAngstrom;
 };
 
 struct GcmcRunConfig {
