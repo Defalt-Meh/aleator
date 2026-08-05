@@ -25,9 +25,51 @@ TEST_CASE("loadRunConfig round-trips a TOML file written to disk", "[integration
     const aleator::io::RunConfig config = aleator::io::loadRunConfig(path);
 
     REQUIRE(config.name == "smoke-test");
-    REQUIRE(config.outputDirectory == "out");
+    // Resolved relative to the config file's own directory (like
+    // framework_cif/structure_file), not the process's current working
+    // directory -- CLAUDE.md CLI milestone: a published result must be
+    // reproducible from its artifacts alone, which shouldn't also require
+    // remembering which directory `aleator` was invoked from.
+    REQUIRE(config.outputDirectory == path.parent_path() / "out");
     REQUIRE(config.rngSeed == 12345);
     REQUIRE(config.threadCount == 1);
+
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("loadRunConfig resolves an absolute output_directory as-is", "[integration][io]") {
+    const auto path = std::filesystem::temp_directory_path() / "aleator_test_run_config_abs.toml";
+    const auto absoluteOut = std::filesystem::temp_directory_path() / "aleator_test_abs_out";
+    {
+        std::ofstream out(path);
+        out << "[run]\n"
+            << "name = \"smoke-test\"\n"
+            << "output_directory = \"" << absoluteOut.string() << "\"\n";
+    }
+
+    const aleator::io::RunConfig config = aleator::io::loadRunConfig(path);
+    REQUIRE(config.outputDirectory == absoluteOut);
+
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("loadRunConfig defaults output_directory to the config file's own directory",
+          "[integration][io]") {
+    const auto path =
+        std::filesystem::temp_directory_path() / "aleator_test_run_config_default_out.toml";
+    {
+        std::ofstream out(path);
+        out << "[run]\nname = \"smoke-test\"\n";
+    }
+
+    const aleator::io::RunConfig config = aleator::io::loadRunConfig(path);
+    // std::filesystem::path equality is lexical, not semantic: normalizing
+    // "T/." yields "T/" (trailing separator preserved by design -- see
+    // lexically_normal()'s spec), which is unequal as a string to "T"
+    // despite naming the same directory. equivalent() is the
+    // filesystem-aware comparison this actually calls for (both are real,
+    // existing temp directories).
+    REQUIRE(std::filesystem::equivalent(config.outputDirectory, path.parent_path()));
 
     std::filesystem::remove(path);
 }

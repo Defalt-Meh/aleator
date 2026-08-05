@@ -72,14 +72,27 @@ std::filesystem::path writeTemp(const std::string& name, const std::string& cont
 
 } // namespace
 
-TEST_CASE("aleator --help exits 0 and documents every subcommand", "[integration][cli]") {
+TEST_CASE("aleator --help exits 0 and documents only subcommands backed by working engines",
+          "[integration][cli]") {
+    // CLAUDE.md CLI milestone: "expose ONLY subcommands backed by working
+    // engines... adding a subcommand that prints NotImplemented is worse
+    // than omitting it -- it advertises capability the tool doesn't have."
+    // pore/md config *schemas* still exist and `validate` still recognizes
+    // them (see below), but `pore analyze`/`md run` must not appear as if
+    // they were real, runnable subcommands.
     const auto result = runCommand("\"" + cliBinary().string() + "\" --help");
     REQUIRE(result.exitCode == 0);
     REQUIRE(result.output.find("gcmc run") != std::string::npos);
-    REQUIRE(result.output.find("pore analyze") != std::string::npos);
-    REQUIRE(result.output.find("md run") != std::string::npos);
     REQUIRE(result.output.find("validate") != std::string::npos);
     REQUIRE(result.output.find("bench") != std::string::npos);
+    // Not just absent from a command list -- not present as a runnable
+    // usage line at all (the help text does mention the bare words "pore
+    // analyze"/"md run" in prose, explaining why they don't exist; that's
+    // fine and intended. What must never appear is the usage-line form,
+    // implying they're invokable the way `aleator gcmc run <config.toml>`
+    // is.)
+    REQUIRE(result.output.find("aleator pore analyze") == std::string::npos);
+    REQUIRE(result.output.find("aleator md run") == std::string::npos);
 }
 
 TEST_CASE("aleator with no arguments exits 1", "[integration][cli]") {
@@ -94,7 +107,24 @@ TEST_CASE("aleator with an unrecognized command exits 1 with a clear message",
     REQUIRE(result.output.find("unrecognized command") != std::string::npos);
 }
 
-TEST_CASE("examples/gcmc_ch4_irmof1.toml validates and dry-runs end to end",
+TEST_CASE("aleator pore analyze / aleator md run are unrecognized commands, not NotImplemented "
+          "subcommands",
+          "[integration][cli]") {
+    // CLAUDE.md CLI milestone: these must not exist as subcommands at all
+    // (see the --help test above) -- confirm the dispatcher genuinely
+    // doesn't recognize them, rather than silently routing "pore"/"md" to
+    // something.
+    const auto poreResult = runCommand("\"" + cliBinary().string() + "\" pore analyze x.toml");
+    REQUIRE(poreResult.exitCode == 1);
+    REQUIRE(poreResult.output.find("unrecognized command \"pore\"") != std::string::npos);
+
+    const auto mdResult = runCommand("\"" + cliBinary().string() + "\" md run x.toml");
+    REQUIRE(mdResult.exitCode == 1);
+    REQUIRE(mdResult.output.find("unrecognized command \"md\"") != std::string::npos);
+}
+
+TEST_CASE("examples/gcmc_ch4_irmof1.toml validates and dry-runs end to end, printing every "
+          "default (including ones this milestone added)",
           "[integration][cli]") {
     const auto configPath = examplesDir() / "gcmc_ch4_irmof1.toml";
     REQUIRE(std::filesystem::exists(configPath));
@@ -110,46 +140,77 @@ TEST_CASE("examples/gcmc_ch4_irmof1.toml validates and dry-runs end to end",
     REQUIRE(dryRunResult.exitCode == 0);
     REQUIRE(dryRunResult.output.find("\"framework_cif\"") != std::string::npos);
     REQUIRE(dryRunResult.output.find("\"uses_peng_robinson\":true") != std::string::npos);
+    // Every default filled in, not just the keys the config set explicitly:
+    // output_directory and energy_grid_spacing_angstrom are both left at
+    // their defaults in this example config.
+    REQUIRE(dryRunResult.output.find("\"output_directory\":\"") != std::string::npos);
+    REQUIRE(dryRunResult.output.find("\"energy_grid_spacing_angstrom\":null") != std::string::npos);
+    // --dry-run must not write anything.
+    REQUIRE_FALSE(std::filesystem::exists(examplesDir() / "out" / "resolved_config.json"));
 }
 
-TEST_CASE("examples/gcmc_ch4_irmof1.toml runs a real (short) GCMC simulation end to end",
+TEST_CASE("examples/gcmc_ch4_irmof1.toml runs the real, validated 0.1 bar GCMC point end to "
+          "end, matching the validation test's numbers, and writes reproducible artifacts",
           "[integration][cli][slow]") {
     const auto configPath = examplesDir() / "gcmc_ch4_irmof1.toml";
+    const auto outputDir = examplesDir() / "out";
+    std::filesystem::remove_all(outputDir);
+
     const auto result =
         runCommand("\"" + cliBinary().string() + "\" gcmc run \"" + configPath.string() + "\"");
     REQUIRE(result.exitCode == 0);
     REQUIRE(result.output.find("Final result") != std::string::npos);
-    REQUIRE(result.output.find("loading") != std::string::npos);
+
+    // This example's rng_seed (2026), pressure_bar (0.1), and step counts
+    // (30000 equilibration + 90000 production) are IDENTICAL to
+    // tests/validation/test_gcmc_ch4_irmof1_isotherm.cc's real 0.1 bar
+    // point, and runGcmcCommand() samples <N> after every production step
+    // (not once per progress update), the same estimator that test uses --
+    // so this is not an approximate match, it's the same deterministic
+    // computation (CLAUDE.md invariant #5) reproduced through the CLI.
+    // Cross-checked directly against a fresh run of that validation test in
+    // this same session/build: both report <N> = 0.2315 (4 s.f.).
+    REQUIRE(result.output.find("0.231456") != std::string::npos);
+    REQUIRE(result.output.find("0.0375804 mmol/g") != std::string::npos);
+
+    // Reproducibility artifacts (CLAUDE.md CLI milestone: "a published
+    // result can be reproduced from its artifacts alone").
+    const auto resolvedConfigPath = outputDir / "resolved_config.json";
+    REQUIRE(std::filesystem::exists(resolvedConfigPath));
+    std::ifstream artifact(resolvedConfigPath);
+    std::ostringstream artifactContent;
+    artifactContent << artifact.rdbuf();
+    REQUIRE(artifactContent.str().find("\"rng_seed\":2026") != std::string::npos);
+    REQUIRE(artifactContent.str().find("\"pressure_bar\":0.10000000000000001") !=
+            std::string::npos);
+
+    std::filesystem::remove_all(outputDir);
 }
 
-TEST_CASE("examples/pore_irmof1.toml dry-runs and cleanly reports NotImplemented when run",
+TEST_CASE("aleator validate on examples/pore_irmof1.toml is schema-valid but honestly reports "
+          "no engine exists for it yet",
           "[integration][cli]") {
     const auto configPath = examplesDir() / "pore_irmof1.toml";
     REQUIRE(std::filesystem::exists(configPath));
 
-    const auto dryRunResult = runCommand("\"" + cliBinary().string() + "\" pore analyze \"" +
-                                          configPath.string() + "\" --dry-run");
-    REQUIRE(dryRunResult.exitCode == 0);
-
-    const auto runResult =
-        runCommand("\"" + cliBinary().string() + "\" pore analyze \"" + configPath.string() + "\"");
-    REQUIRE(runResult.exitCode == 2);
-    REQUIRE(runResult.output.find("not implemented") != std::string::npos);
+    const auto result =
+        runCommand("\"" + cliBinary().string() + "\" validate \"" + configPath.string() + "\"");
+    REQUIRE(result.exitCode == 2);
+    REQUIRE(result.output.find("not implemented") != std::string::npos);
+    REQUIRE(result.output.find("schema-valid") != std::string::npos);
 }
 
-TEST_CASE("examples/md_irmof1.toml dry-runs and cleanly reports NotImplemented when run",
+TEST_CASE("aleator validate on examples/md_irmof1.toml is schema-valid but honestly reports no "
+          "engine exists for it yet",
           "[integration][cli]") {
     const auto configPath = examplesDir() / "md_irmof1.toml";
     REQUIRE(std::filesystem::exists(configPath));
 
-    const auto dryRunResult =
-        runCommand("\"" + cliBinary().string() + "\" md run \"" + configPath.string() + "\" --dry-run");
-    REQUIRE(dryRunResult.exitCode == 0);
-
-    const auto runResult =
-        runCommand("\"" + cliBinary().string() + "\" md run \"" + configPath.string() + "\"");
-    REQUIRE(runResult.exitCode == 2);
-    REQUIRE(runResult.output.find("not implemented") != std::string::npos);
+    const auto result =
+        runCommand("\"" + cliBinary().string() + "\" validate \"" + configPath.string() + "\"");
+    REQUIRE(result.exitCode == 2);
+    REQUIRE(result.output.find("not implemented") != std::string::npos);
+    REQUIRE(result.output.find("schema-valid") != std::string::npos);
 }
 
 TEST_CASE("aleator bench runs and reports timing", "[integration][cli]") {

@@ -1,4 +1,4 @@
-# Grand-canonical Monte Carlo: methane adsorption in IRMOF-1 (MOF-5), 298 K, 1 bar.
+# Grand-canonical Monte Carlo: methane adsorption in IRMOF-1 (MOF-5), 298 K, 0.1 bar.
 #
 # Structure and force field are real, published data (see
 # tests/validation/data/irmof1/PROVENANCE.md for exact sources): the CIF is
@@ -6,25 +6,31 @@
 # Lennard-Jones parameters are RASPA2's "GenericMOFs" UFF-derived framework
 # terms plus a TraPPE-style united-atom methane adsorbate.
 #
-# Step counts here are deliberately small (a smoke-test/demo run, seconds not
-# minutes) -- for a real, statistically meaningful isotherm point see
-# tests/validation/test_gcmc_ch4_irmof1_isotherm.cc, which uses the same
-# structure and force field with much longer runs and reports real numbers
-# against a published reference isotherm.
+# This is not a shortened smoke test: `rng_seed`, `pressure_bar`, and the
+# step counts below are IDENTICAL to
+# tests/validation/test_gcmc_ch4_irmof1_isotherm.cc's real 0.1 bar point, and
+# the CLI's production loop samples <N> the same way that test does (every
+# step, not once per progress update) -- so `aleator gcmc run` on this file
+# reproduces that test's <N> and loading numbers exactly (same seed, same
+# deterministic RNG stream -- CLAUDE.md invariant #5), not just
+# approximately. tests/integration/test_cli_end_to_end.cc checks this. Now
+# affordable to run for real (rather than shortened) thanks to CLAUDE.md
+# section 5's performance milestone: ~1 s on this codebase's post-optimization
+# GCMC engine.
 
 [run]
-name = "ch4-irmof1-quicktest"
+name = "ch4-irmof1-0.1bar"
 output_directory = "out"
-rng_seed = 42
+rng_seed = 2026
 thread_count = 1
 
 [gcmc]
 framework_cif = "IRMOF-1.cif"
 temperature_kelvin = 298.0
-pressure_bar = 1.0
+pressure_bar = 0.1
 cutoff_angstrom = 12.0
-equilibration_steps = 2000
-production_steps = 4000
+equilibration_steps = 30000
+production_steps = 90000
 
 [gcmc.adsorbate]
 name = "CH4"

@@ -201,11 +201,14 @@ but calling them throws `NotImplemented` rather than doing anything:
 - **Structure file writers** (`io`): PDB and LAMMPS `data` output. Reading (CIF) works;
   writing does not yet.
 - **Energy-biased Monte Carlo move variants** and multi-species GCMC mixtures.
-- **MD force-field selection in the CLI's `md` config schema**: `aleator md run` fully
-  validates its config and structure file and wires up the integrator, but the
-  integrator itself is unimplemented (see above), so a real run always ends in a clean
-  `NotImplemented` rather than doing anything — the same is true of `aleator pore
-  analyze`, for the same underlying reason.
+- **`[pore]`/`[md]` config schemas exist (`io/config.hpp`) with no CLI subcommand to run
+  them**: `engines/geometry_analysis` and `engines/dynamics` are themselves
+  unimplemented (see above), and CLAUDE.md's CLI milestone is explicit that a
+  subcommand which just prints `NotImplemented` when run is worse than not having it —
+  so there is no `aleator pore analyze` or `aleator md run`. `aleator validate` still
+  schema-validates `[pore]`/`[md]` config files (real, useful groundwork ahead of those
+  engines existing) and says plainly that there's no engine for them yet, distinct from
+  a malformed config.
 
 ## Architecture
 
@@ -274,9 +277,12 @@ cmake --preset bench && cmake --build --preset bench && ./scripts/run_benchmarks
   available SIMD path — across SSE4, AVX2, AVX-512, and NEON targets. As of this writing
   that runtime dispatch is wired up for exactly one kernel (`vectorSum`, an internal
   integer reduction used in tests) — no physics kernel (Lennard-Jones, Ewald, neighbor
-  search) is Highway-vectorized yet. The "faster than RASPA" performance work in CLAUDE.md
-  section 5 hasn't started; the SIMD layer today is scaffolding with one real user, not a
-  hot-path accelerator.
+  search) is Highway-vectorized yet; the SIMD layer today is scaffolding with one real
+  user, not a hot-path accelerator. CLAUDE.md section 5's "faster than RASPA" performance
+  work has started (see the Performance section above) but hasn't touched SIMD — its one
+  win so far (the CH4/IRMOF-1 isotherm, 32.0 s → 3.97 s) came from algorithmic fixes
+  (an exact orthorhombic minimum-image fast path, a guest-guest cell list), not
+  vectorization.
 - `system` — same as `dev`, but configured against system-installed dependencies instead
   of vcpkg (no `VCPKG_ROOT` needed; Python bindings off). vcpkg is the supported,
   CI-covered path, but `find_package()` for every dependency also succeeds against a
@@ -302,29 +308,44 @@ surface above stabilizes further.
 
 ## Command-line interface
 
-The CLI's design goal is to not repeat RASPA's and LAMMPS's biggest usability problems:
-run configuration is plain TOML (never a bespoke scripting language), every config is
-fully validated — every required key checked, every value range-checked — before
-anything runs, and a malformed config fails immediately with the exact key and line
-number, rather than partway through a run that might otherwise take hours.
+The CLI is meant to be a real differentiator, not an afterthought: both RASPA and
+LAMMPS have genuinely painful UX, and that's a defensible opening. The design goal is
+to not repeat their biggest usability problems: run configuration is plain TOML (never
+a bespoke scripting language), every config is fully validated — every required key
+checked, every value range-checked — before anything runs, a malformed config fails
+immediately with the exact key and line number rather than partway through a run that
+might otherwise take hours, and **only subcommands backed by a working engine exist at
+all**:
 
 ```bash
 aleator --version
 aleator gcmc run <config.toml> [--dry-run] [--json]     # grand-canonical Monte Carlo
-aleator pore analyze <config.toml> [--dry-run] [--json] # pore geometry (not implemented yet)
-aleator md run <config.toml> [--dry-run] [--json]       # molecular dynamics (not implemented yet)
 aleator validate <config.toml>                          # validate a config, then exit
 aleator bench [--json]                                  # a quick built-in timing check
 ```
 
+GCMC is the only implemented engine right now (see the status table above), so it's the
+only one with a runnable subcommand — there is no `aleator pore analyze` or
+`aleator md run`. A subcommand that just prints "not implemented" when run is worse than
+not having it: it advertises capability the tool doesn't actually have. `[pore]`/`[md]`
+config *schemas* still exist (real groundwork for when those engines land), and
+`aleator validate` still recognizes them — it will schema-validate the file and then say
+plainly that there's no engine for it yet (exit code `2`, distinct from a malformed
+config's `1`), never silently call it "valid" in a way that could be mistaken for
+"runnable."
+
 `--dry-run` runs every check a real run would (parsing the config, opening and parsing
 the structure file, checking that force-field parameters cover every element actually
-present) and prints the fully-resolved configuration, without touching the physics.
-`--json` switches the final result to one line of machine-readable JSON on stdout;
-progress and diagnostic messages always go to stderr, so piping `--json` output is safe.
-Exit codes: `0` success, `1` a configuration or usage error, `2` the requested physics is
-genuinely not implemented yet in this build (surfaced as a clean, expected error rather
-than a crash or a silent no-op).
+present) and prints the fully-resolved configuration — every default filled in, not just
+the keys the config set explicitly — without touching the physics or writing anything.
+`--json` switches that to one line of machine-readable JSON on stdout; progress and
+diagnostic messages always go to stderr, so piping `--json` output is safe. A real
+(non-dry-run) `gcmc run` writes that same fully-resolved configuration, including the RNG
+seed, to `<run.output_directory>/resolved_config.json` (resolved relative to the config
+file's own location, not whatever directory `aleator` happened to be invoked from) — so a
+published result can be reproduced from its artifacts alone. Exit codes: `0` success, `1`
+a configuration or usage error, `2` `validate` was pointed at a schema-valid config for an
+engine this build doesn't implement yet.
 
 A minimal GCMC config, with an explicit per-element Lennard-Jones parameter table rather
 than a hidden built-in force-field database:
@@ -352,10 +373,22 @@ sigma_angstrom = 2.46155
 # ...one [[gcmc.framework_lj]] entry per element actually present in the CIF
 ```
 
-`examples/` contains real, runnable configs, including a genuine (if deliberately short)
-methane-in-IRMOF-1 GCMC run using the same real structure and force field as the
-validation suite above — run `aleator gcmc run examples/gcmc_ch4_irmof1.toml` to see it
-end to end.
+Every physical quantity in the schema carries its unit in the key name
+(`temperature_kelvin`, `pressure_bar`, `cutoff_angstrom`, `epsilon_kelvin`,
+`sigma_angstrom`, `mass_amu`) — never a bare `temperature` or `pressure`. The optional
+`gcmc.energy_grid_spacing_angstrom` key (CLAUDE.md section 5's `FrameworkEnergyGrid`) is
+unset by default, meaning "direct O(N) guest-host scan," not an implicit spacing —
+setting it is a real accuracy/speed tradeoff, not free, so it's opt-in (see that
+section's README writeup for the measured cost).
+
+`examples/` contains real, runnable configs. `examples/gcmc_ch4_irmof1.toml` is not a
+shortened smoke test: it uses the exact same seed, pressure, and step counts as
+`tests/validation/test_gcmc_ch4_irmof1_isotherm.cc`'s real 0.1 bar point, and the CLI
+samples its running mean the same way that test does (every step, not once per progress
+update) — so `aleator gcmc run examples/gcmc_ch4_irmof1.toml` reproduces that test's `<N>`
+and loading numbers exactly, not approximately (same deterministic RNG stream, CLAUDE.md
+invariant #5), in about a second thanks to CLAUDE.md section 5's performance milestone.
+`tests/integration/test_cli_end_to_end.cc` checks this cross-consistency directly.
 
 ## Testing
 

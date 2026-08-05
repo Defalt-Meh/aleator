@@ -14,8 +14,6 @@ target_link_libraries(aleator_cli
         aleator::core::neighbor
         aleator::forcefield::pairwise
         aleator::engines::monte_carlo
-        aleator::engines::dynamics
-        aleator::engines::geometry_analysis
         aleator::io
         spdlog::spdlog
 )

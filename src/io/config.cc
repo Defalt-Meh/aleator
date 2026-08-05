@@ -88,9 +88,9 @@ std::filesystem::path resolveRelativeTo(const std::filesystem::path& configFile,
                                          const std::string& relativeOrAbsolute) {
     const std::filesystem::path candidate(relativeOrAbsolute);
     if (candidate.is_absolute()) {
-        return candidate;
+        return candidate.lexically_normal();
     }
-    return configFile.parent_path() / candidate;
+    return (configFile.parent_path() / candidate).lexically_normal();
 }
 
 toml::table parseFile(const std::filesystem::path& file) {
@@ -109,8 +109,15 @@ RunConfig parseRunTable(const toml::table& root, const std::filesystem::path& fi
 
     RunConfig config;
     config.name = requireValue<std::string>(run, "name", filePath, "run.name", "a string");
-    config.outputDirectory = optionalValue<std::string>(
-        run, "output_directory", std::string("."), filePath, "run.output_directory", "a string");
+    // Resolved relative to the config file's own directory, same as
+    // framework_cif/structure_file below -- not the process's current
+    // working directory, so that "a published result can be reproduced
+    // from its artifacts alone" (CLAUDE.md CLI milestone) doesn't also
+    // silently depend on which directory `aleator` happened to be invoked
+    // from.
+    config.outputDirectory = resolveRelativeTo(
+        file, optionalValue<std::string>(run, "output_directory", std::string("."), filePath,
+                                          "run.output_directory", "a string"));
     config.rngSeed = static_cast<std::uint64_t>(
         optionalValue<std::int64_t>(run, "rng_seed", 0, filePath, "run.rng_seed", "an integer"));
     config.threadCount = static_cast<unsigned>(optionalValue<std::int64_t>(
