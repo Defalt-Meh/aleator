@@ -34,6 +34,7 @@ plausible-looking guess.
 | `forcefield/pairwise` | Lennard-Jones energy, forces, and virial — truncated / shifted / linear-force-shifted, with analytic long-range tail corrections and Lorentz-Berthelot or geometric mixing rules | Real NIST Standard Reference Simulation Website (SRSW) reference configurations and energies; analytic forces vs. central finite difference |
 | `forcefield/electrostatics` | Standard Ewald summation: real-space, reciprocal-space, self-energy, intramolecular exclusion correction, tinfoil boundary conditions | NaCl rock-salt Madelung constant (1.747564594633…, matched to 1.5×10⁻⁸ relative — required 10⁻⁶); NIST SRSW SPC/E water reference energies, term by term; invariance under the Ewald splitting parameter; forces vs. finite difference |
 | `engines/monte_carlo` | Grand-canonical Monte Carlo: insertion, deletion, translation, and rotation moves for rigid (single- or multi-site) adsorbate molecules, with a Peng-Robinson equation of state supplying the fugacity in the chemical-potential term. Supports charged adsorbates/frameworks via an incrementally-maintained Ewald reciprocal-space cache (`EwaldIncrementalState`) — see below. | *Validated*: detailed balance verified as a runtime-checked algebraic identity for every move type; Widom test-particle-insertion Henry coefficient matches this engine's own low-pressure isotherm slope to 0.006% on a synthetic system (required 2%), and separately matches this engine's own real IRMOF-1/methane low-pressure loading to within its tight tolerance. *Validated with known deviation*: the full four-point methane/IRMOF-1 isotherm sits systematically 12–15% below the published pyIAST reference curve — see below. *Validated with known deviation (charged)*: real CO2/IRMOF-1 loading (Ewald electrostatics, real DDEC framework charges) matches a published reference to well under 1σ at low/mid pressure; the high-pressure point deviates by ~2.2σ (~19.5%) — see below. |
+| `engines/geometry_analysis` | Porous-material geometry: largest cavity diameter (LCD), pore limiting diameter (PLD), N₂-probe accessible surface area (ASA) and accessible volume (AV), from a periodic radical (power/Laguerre) Voronoi decomposition of the framework via Voro++, probe-radius parameterized, triclinic cells first-class. | *Validated*: PLD and ASA/AV match real Zeo++ 0.4.7 output on real IZA zeolite structures (LTA, MFI, FAU) — PLD to ≤4×10⁻⁴ Å, ASA/AV within 10%; `Lattice::minimumImageDisplacement` cross-checked against a 200,000-trial brute-force periodic-image search on a genuinely triclinic structure (PTY); FAU's real published inaccessible sodalite-cage pockets correctly come out as a nonzero, minority fraction of the void space. *Validated with known deviation*: LCD sits systematically 0.4–3.6% below Zeo++ on every structure tested (power-vs-Apollonius diagram, a real algorithmic approximation shared with Zeo++'s own tessellation library); PTY's PLD/ASA/AV additionally sit 1.8%/12%/8.8% off Zeo++, traced to a specific percolation-critical Voronoi edge, not left unexplained — see below. |
 
 The IRMOF-1/methane comparison against the published pyIAST reference isotherm is the
 most demanding validation in the codebase and is reported honestly rather than rounded
@@ -189,6 +190,56 @@ re-justification. `benchmarks/bench_gcmc_ch4_irmof1.cc` tracks a synthetic-syste
 equivalent of this workload as an ongoing CI-checked baseline (`scripts/
 run_benchmarks.sh`, CLAUDE.md's >5% regression gate).
 
+### Pore geometry: periodic radical Voronoi decomposition
+
+`engines/geometry_analysis` computes LCD, PLD, ASA, and AV from a periodic Voronoi
+network of the framework, weighted by each atom's van der Waals radius (a "radical" or
+power-diagram decomposition, since atoms have different sizes) — the same conceptual
+approach Zeo++ itself uses, and the standard building block RASPA/Zeo++ users expect.
+
+**Dependency choice, made and justified before writing code**: [Voro++](https://math.lbl.gov/voro++/)
+(BSD-3-Clause-LBNL), not a reimplementation. It's mature, supports periodic triclinic
+domains with per-particle radii (`container_periodic_poly`) out of the box, and is
+available both via vcpkg and as an Ubuntu 24.04 system package (`libvoro++-dev`) —
+consistent with this codebase's "no hard vcpkg requirement" portability contract.
+
+**Triclinic support, made real, not assumed**: Voro++ requires its periodic box in a
+canonical lower-triangular form (`(bx,0,0),(bxy,by,0),(bxz,byz,bz)`); this codebase's own
+CIF-derived lattice matrix already happens to satisfy that form for the real structures
+tested, but the general transform (a Gram-Schmidt orthogonalization of the lattice's own
+vectors — an isometric re-expression, not an approximation, since it preserves the
+lattice's Gram/metric matrix exactly) is implemented and used unconditionally, with every
+position round-tripped through fractional coordinates rather than an explicit rotation
+matrix. `Lattice::minimumImageDisplacement` itself — the actual PBC primitive invariant 6
+requires be tested on a non-orthogonal cell — is cross-checked against a 200,000-trial
+brute-force periodic-image search (-3..3 in each direction) on the real triclinic PTY
+structure (α=84.6°, β=83.8°, γ=86.7°): zero mismatches, max relative error 1.5×10⁻¹⁴
+(floating-point noise).
+
+**A real bug found and fixed during validation, not assumed away**: an early
+implementation weighted each Voronoi-network edge by `min(endpoint radii)`. On real LTA,
+this gave a PLD of 10.016 Å (≈ the LCD, i.e. "no real constriction anywhere" — obviously
+wrong for a zeolite). Traced to a specific oxygen atom at a special symmetry position
+(x=0) whose Voronoi cell has a face with two vertices 11.6 Å apart: the true constriction
+is in the *interior* of that long edge, not at either endpoint, and both endpoints happen
+to sit in wide cage-center regions on either side of it. Fixed by sampling the free
+radius along each edge's actual physical path (spacing chosen empirically: 0.2 Å already
+matched Zeo++ to ≤3×10⁻³ Å on LTA/MFI/FAU; the shipped 0.02 Å matches to ≤4×10⁻⁴ Å).
+
+**The honest remainder**: LCD sits 0.4–3.6% below real Zeo++ 0.4.7 output on every
+structure tested — a genuine, understood gap between Voro++'s power (Laguerre) diagram
+and the "true" Apollonius (additively-weighted) diagram that "Voronoi decomposition of
+unequal-radius spheres" technically means (curved cell boundaries, not implemented by any
+fast library, including the one underneath Zeo++ itself). And PTY (the triclinic
+structure) has a larger PLD/ASA/AV gap than LTA/MFI/FAU, investigated specifically rather
+than assumed to be more of the same LCD-style noise: four independent checks (lattice vs.
+Zeo++'s own printed box vectors, minimum image vs. brute force, Voro++ grid-resolution
+insensitivity, exact total-tessellation-volume match) ruled out a bug before the gap was
+traced to a specific percolation-critical edge whose interior constriction this
+codebase's finer sampling finds and Zeo++'s reported number appears not to — full writeup
+in `tests/validation/data/pore_geometry/PROVENANCE.md` and
+`known_deviation_baseline.md`.
+
 ## What's declared but not yet implemented
 
 These have interfaces defined (so the rest of the codebase can be written against them)
@@ -196,20 +247,16 @@ but calling them throws `NotImplemented` rather than doing anything:
 
 - **Molecular dynamics** (`engines/dynamics`): velocity-Verlet integration, thermostats,
   barostats. Will be validated on NVE energy drift and equipartition before being trusted.
-- **Porous-material geometry analysis** (`engines/geometry_analysis`): Voronoi-based pore
-  limiting diameter, largest cavity diameter, accessible surface area. Will be validated
-  against Zeo++'s published values for LTA, MFI, and FAU.
 - **Structure file writers** (`io`): PDB and LAMMPS `data` output. Reading (CIF) works;
   writing does not yet.
 - **Energy-biased Monte Carlo move variants** and multi-species GCMC mixtures.
-- **`[pore]`/`[md]` config schemas exist (`io/config.hpp`) with no CLI subcommand to run
-  them**: `engines/geometry_analysis` and `engines/dynamics` are themselves
-  unimplemented (see above), and CLAUDE.md's CLI milestone is explicit that a
-  subcommand which just prints `NotImplemented` when run is worse than not having it —
-  so there is no `aleator pore analyze` or `aleator md run`. `aleator validate` still
-  schema-validates `[pore]`/`[md]` config files (real, useful groundwork ahead of those
-  engines existing) and says plainly that there's no engine for them yet, distinct from
-  a malformed config.
+- **`[md]` config schema exists (`io/config.hpp`) with no CLI subcommand to run it**:
+  `engines/dynamics` is itself unimplemented (see above), and CLAUDE.md's CLI milestone
+  is explicit that a subcommand which just prints `NotImplemented` when run is worse than
+  not having it — so there is no `aleator md run`. `aleator validate` still
+  schema-validates `[md]` config files (real, useful groundwork ahead of that engine
+  existing) and says plainly that there's no engine for it yet, distinct from a malformed
+  config.
 
 ## Architecture
 
@@ -224,7 +271,8 @@ src/
   engines/
     monte_carlo/       # GCMC moves, acceptance criteria, Peng-Robinson EOS
     dynamics/          # MD integrators (declared only)
-    geometry_analysis/ # pore geometry (declared only)
+    geometry_analysis/ # pore geometry: Voro++-based periodic radical Voronoi network,
+                        # percolation graph, LCD/PLD/ASA/AV
   io/            # CIF reading, TOML run configuration
   cli/           # command-line entry point
   bindings/      # Python extension module (nanobind)
@@ -321,32 +369,34 @@ all**:
 ```bash
 aleator --version
 aleator gcmc run <config.toml> [--dry-run] [--json]     # grand-canonical Monte Carlo
+aleator pore analyze <config.toml> [--dry-run] [--json] # LCD, PLD, ASA, AV
 aleator validate <config.toml>                          # validate a config, then exit
 aleator bench [--json]                                  # a quick built-in timing check
 ```
 
-GCMC is the only implemented engine right now (see the status table above), so it's the
-only one with a runnable subcommand — there is no `aleator pore analyze` or
-`aleator md run`. A subcommand that just prints "not implemented" when run is worse than
-not having it: it advertises capability the tool doesn't actually have. `[pore]`/`[md]`
-config *schemas* still exist (real groundwork for when those engines land), and
-`aleator validate` still recognizes them — it will schema-validate the file and then say
-plainly that there's no engine for it yet (exit code `2`, distinct from a malformed
-config's `1`), never silently call it "valid" in a way that could be mistaken for
-"runnable."
+GCMC and pore-geometry analysis are the implemented engines right now (see the status
+table above), so those are the runnable subcommands — there is no `aleator md run`
+(`engines/dynamics` is still `NotImplemented`). A subcommand that just prints "not
+implemented" when run is worse than not having it: it advertises capability the tool
+doesn't actually have. The `[md]` config *schema* still exists (real groundwork for when
+that engine lands), and `aleator validate` still recognizes it — it will schema-validate
+the file and then say plainly that there's no engine for it yet (exit code `2`, distinct
+from a malformed config's `1`), never silently call it "valid" in a way that could be
+mistaken for "runnable."
 
 `--dry-run` runs every check a real run would (parsing the config, opening and parsing
 the structure file, checking that force-field parameters cover every element actually
-present) and prints the fully-resolved configuration — every default filled in, not just
+present — for `pore analyze`, that every element in the CIF has a known van der Waals
+radius) and prints the fully-resolved configuration — every default filled in, not just
 the keys the config set explicitly — without touching the physics or writing anything.
 `--json` switches that to one line of machine-readable JSON on stdout; progress and
 diagnostic messages always go to stderr, so piping `--json` output is safe. A real
-(non-dry-run) `gcmc run` writes that same fully-resolved configuration, including the RNG
-seed, to `<run.output_directory>/resolved_config.json` (resolved relative to the config
-file's own location, not whatever directory `aleator` happened to be invoked from) — so a
-published result can be reproduced from its artifacts alone. Exit codes: `0` success, `1`
-a configuration or usage error, `2` `validate` was pointed at a schema-valid config for an
-engine this build doesn't implement yet.
+(non-dry-run) `gcmc run` or `pore analyze` writes that same fully-resolved configuration,
+including the RNG seed, to `<run.output_directory>/resolved_config.json` (resolved
+relative to the config file's own location, not whatever directory `aleator` happened to
+be invoked from) — so a published result can be reproduced from its artifacts alone. Exit
+codes: `0` success, `1` a configuration or usage error, `2` `validate` was pointed at a
+schema-valid config for an engine this build doesn't implement yet.
 
 A minimal GCMC config, with an explicit per-element Lennard-Jones parameter table rather
 than a hidden built-in force-field database:
@@ -390,6 +440,9 @@ update) — so `aleator gcmc run examples/gcmc_ch4_irmof1.toml` reproduces that 
 and loading numbers exactly, not approximately (same deterministic RNG stream, CLAUDE.md
 invariant #5), in about a second thanks to CLAUDE.md section 5's performance milestone.
 `tests/integration/test_cli_end_to_end.cc` checks this cross-consistency directly.
+`examples/pore_irmof1.toml` runs `pore analyze` on the same real IRMOF-1 structure (424
+framework atoms after symmetry expansion) — a genuine multi-minute computation at this
+size, unlike the GCMC example, so use `--dry-run` there for a quick config check.
 
 ## Testing
 
@@ -404,12 +457,13 @@ Tests are organized into four tiers, run via CTest with matching labels:
   entry here is tight: a real regression of ~10% or more will fail it.
 - **known-deviation** — informational tests for a validated component that still
   disagrees with an external published reference in a way this codebase hasn't
-  fully explained yet (currently: the CH4/IRMOF-1 isotherm, see above). These never
-  turn green by loosening a tolerance around the disagreement; they compare against
-  a checked-in baseline and fail only if the gap has grown. CI reports this tier
-  separately from `validation` so a documented, tracked disagreement can never mask
-  a real regression elsewhere, and a real regression here can never hide inside a
-  suite that's "supposed to" have some slack.
+  fully explained yet (currently: the CH4/IRMOF-1 and CO2/IRMOF-1 isotherms, and
+  pore-geometry LCD/PTY, see above). These never turn green by loosening a tolerance
+  around the disagreement; they compare against a checked-in baseline and fail only
+  if the gap has grown. CI reports this tier separately from `validation` so a
+  documented, tracked disagreement can never mask a real regression elsewhere, and a
+  real regression here can never hide inside a suite that's "supposed to" have some
+  slack.
 
 ```bash
 ctest --preset dev -L unit

@@ -3,16 +3,16 @@
 // io/ together.
 //
 // CLAUDE.md milestone: "the CLI is the differentiator... expose ONLY
-// subcommands backed by working engines." Only `gcmc run`, `validate`, and
-// `bench` exist as executable subcommands — `pore analyze` and `md run` do
-// not, because engines/geometry_analysis and engines/dynamics are
-// NotImplemented, and a subcommand that prints NotImplemented when run
-// advertises capability this build doesn't have (worse than omitting it).
-// `[pore]`/`[md]` config *schemas* still exist (io/config.hpp) and
-// `aleator validate` still recognizes them — schema validation is real and
-// honest regardless of whether an engine exists yet — but it says plainly
-// that the engine isn't implemented rather than silently calling the
-// config "valid" in a way that could be mistaken for "runnable".
+// subcommands backed by working engines." `gcmc run`, `pore analyze`,
+// `validate`, and `bench` exist as executable subcommands — `md run` does
+// not, because engines/dynamics is NotImplemented, and a subcommand that
+// prints NotImplemented when run advertises capability this build doesn't
+// have (worse than omitting it). The `[md]` config *schema* still exists
+// (io/config.hpp) and `aleator validate` still recognizes it — schema
+// validation is real and honest regardless of whether an engine exists yet
+// — but it says plainly that the engine isn't implemented rather than
+// silently calling the config "valid" in a way that could be mistaken for
+// "runnable".
 //
 // Config validation happens entirely up front — a malformed config fails
 // immediately with a message naming the offending key (and, where toml++
@@ -58,6 +58,7 @@
 #include "core/math/counter_based_rng.hpp"
 #include "core/math/particle_data.hpp"
 #include "core/neighbor/verlet_list.hpp"
+#include "engines/geometry_analysis/pore_analysis.hpp"
 #include "engines/monte_carlo/framework_energy_grid.hpp"
 #include "engines/monte_carlo/molecule_species.hpp"
 #include "engines/monte_carlo/monte_carlo_engine.hpp"
@@ -80,17 +81,18 @@ void printUsage() {
         << "  aleator --version                              Print the version and exit\n"
         << "  aleator --help                                 Print this message and exit\n"
         << "  aleator gcmc run <config.toml> [flags]          Run grand-canonical Monte Carlo\n"
+        << "  aleator pore analyze <config.toml> [flags]      Analyze pore geometry (LCD, PLD, "
+           "ASA, AV)\n"
         << "  aleator validate <config.toml>                  Validate a config, then exit\n"
         << "  aleator bench [--json]                          Run a quick built-in benchmark\n"
         << "\n"
-        << "Only engines that are actually implemented get a subcommand: GCMC is the only\n"
-        << "one right now. Pore-geometry analysis and molecular dynamics are not\n"
-        << "implemented yet, so there is no `pore analyze` or `md run` -- see CLAUDE.md\n"
-        << "section 0 for status. `aleator validate` still recognizes [pore]/[md] config\n"
-        << "files (the schemas exist) and will say so plainly, distinct from a malformed\n"
-        << "config.\n"
+        << "Only engines that are actually implemented get a subcommand: GCMC and\n"
+        << "pore-geometry analysis. Molecular dynamics is not implemented yet, so there is\n"
+        << "no `md run` -- see CLAUDE.md section 0 for status. `aleator validate` still\n"
+        << "recognizes an [md] config file (the schema exists) and will say so plainly,\n"
+        << "distinct from a malformed config.\n"
         << "\n"
-        << "Flags (gcmc run):\n"
+        << "Flags (gcmc run, pore analyze):\n"
         << "  --dry-run   Validate the config and structure file, print the fully resolved\n"
         << "              configuration (every default included), and exit without\n"
         << "              running anything or writing any output.\n"
@@ -98,9 +100,10 @@ void printUsage() {
         << "              human-readable text. Progress/diagnostic messages still go to\n"
         << "              stderr, so this is safe to pipe.\n"
         << "\n"
-        << "A real (non-dry-run) `gcmc run` writes the fully resolved configuration,\n"
-        << "including the RNG seed, to <run.output_directory>/resolved_config.json --\n"
-        << "enough to reproduce a published result from its artifacts alone.\n"
+        << "A real (non-dry-run) `gcmc run` or `pore analyze` writes the fully resolved\n"
+        << "configuration, including the RNG seed, to\n"
+        << "<run.output_directory>/resolved_config.json -- enough to reproduce a published\n"
+        << "result from its artifacts alone.\n"
         << "\n"
         << "Exit codes: 0 success, 1 configuration/usage error, 2 `validate` was pointed\n"
         << "at a valid config for an engine this build doesn't implement yet.\n";
@@ -451,18 +454,142 @@ int runGcmcCommand(const std::filesystem::path& configPath, bool dryRun, bool js
     return kExitSuccess;
 }
 
+// ---------------------------------------------------------------- pore ---
+
+// engines/geometry_analysis is now implemented (CLAUDE.md section 0), so
+// `pore analyze` is a real subcommand -- `md run` still is not
+// (engines/dynamics remains NotImplemented) and stays absent from --help.
+
+/// Per-atom radii for `structure`, using this codebase's own Zeo++-sourced
+/// default radius table (pore_analysis.hpp's
+/// zeoPlusPlusDefaultRadiusAngstrom) -- deliberately not a config key: the
+/// milestone that added this command reused the built-in table rather than
+/// inventing a bespoke `[[pore.radii]]` schema for something the table
+/// already covers for every element these example/test frameworks use.
+/// Throws std::invalid_argument (via zeoPlusPlusDefaultRadiusAngstrom), by
+/// element name, if the CIF contains an element the table doesn't have --
+/// caught by main()'s generic handler like any other config-time error.
+std::vector<double> poreRadiiFor(const aleator::io::StructureData& structure) {
+    std::vector<double> radii;
+    radii.reserve(structure.speciesSymbols.size());
+    for (const auto& symbol : structure.speciesSymbols) {
+        radii.push_back(aleator::engines::zeoPlusPlusDefaultRadiusAngstrom(symbol));
+    }
+    return radii;
+}
+
+std::string resolvedConfigJson(const aleator::io::PoreRunConfig& cfg) {
+    const auto& run = cfg.run;
+    const auto& p = cfg.pore;
+    std::ostringstream oss;
+    oss << std::setprecision(17);
+    oss << "{\"run\":{\"name\":\"" << jsonEscape(run.name) << "\",\"output_directory\":\""
+        << jsonEscape(run.outputDirectory.string()) << "\",\"rng_seed\":" << run.rngSeed
+        << ",\"thread_count\":" << run.threadCount << "},"
+        << "\"pore\":{\"framework_cif\":\"" << jsonEscape(p.frameworkCif.string())
+        << "\",\"probe_radius_angstrom\":" << p.probeRadiusAngstrom << "}}";
+    return oss.str();
+}
+
+void printPoreConfig(const aleator::io::PoreRunConfig& cfg, bool json) {
+    if (json) {
+        std::cout << resolvedConfigJson(cfg) << "\n";
+        return;
+    }
+    const auto& run = cfg.run;
+    const auto& p = cfg.pore;
+    std::cout << std::setprecision(17);
+    std::cout << "run.name                     = " << run.name << "\n"
+              << "run.output_directory         = " << run.outputDirectory.string() << "\n"
+              << "run.rng_seed                 = " << run.rngSeed << "\n"
+              << "run.thread_count             = " << run.threadCount << "\n"
+              << "pore.framework_cif           = " << p.frameworkCif.string() << "\n"
+              << "pore.probe_radius_angstrom   = " << p.probeRadiusAngstrom << "\n";
+}
+
+/// Mirrors writeResolvedConfig(GcmcRunConfig) -- see that function's doc
+/// comment for why this artifact exists.
+void writeResolvedConfig(const aleator::io::PoreRunConfig& cfg) {
+    std::filesystem::create_directories(cfg.run.outputDirectory);
+    const auto path = cfg.run.outputDirectory / "resolved_config.json";
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error("could not open " + path.string() + " for writing (run.output_directory "
+                                  "= " +
+                                  cfg.run.outputDirectory.string() + ")");
+    }
+    out << resolvedConfigJson(cfg);
+    spdlog::info("wrote resolved configuration (incl. run.rng_seed={}) to {}", cfg.run.rngSeed,
+                 path.string());
+}
+
+int runPoreCommand(const std::filesystem::path& configPath, bool dryRun, bool json) {
+    const aleator::io::PoreRunConfig cfg = aleator::io::loadPoreConfig(configPath);
+    const auto structure = aleator::io::readCif(cfg.pore.frameworkCif);
+    const std::vector<double> radii = poreRadiiFor(structure); // validates element coverage too
+
+    if (dryRun) {
+        printPoreConfig(cfg, json);
+        return kExitSuccess;
+    }
+
+    spdlog::info("loaded {} framework atoms ({} species) from {}", structure.particles.size(),
+                 structure.speciesSymbols.size(), cfg.pore.frameworkCif.string());
+
+    aleator::engines::PoreAnalysisOptions options;
+    options.probeRadiusAngstrom = cfg.pore.probeRadiusAngstrom;
+    options.sampleSeed = cfg.run.rngSeed;
+
+    spdlog::info("analyzing pore geometry (probe radius = {} Ang)...", options.probeRadiusAngstrom);
+    const auto result =
+        aleator::engines::analyzePoreGeometry(structure.particles, structure.lattice, radii, options);
+
+    writeResolvedConfig(cfg);
+
+    if (json) {
+        std::ostringstream oss;
+        oss << std::setprecision(17);
+        oss << "{\"largest_cavity_diameter_angstrom\":" << result.largestCavityDiameterAngstrom
+            << ",\"pore_limiting_diameter_angstrom\":" << result.poreLimitingDiameterAngstrom
+            << ",\"accessible_surface_area_angstrom2\":" << result.accessibleSurfaceAreaAngstromSq
+            << ",\"inaccessible_surface_area_angstrom2\":" << result.inaccessibleSurfaceAreaAngstromSq
+            << ",\"accessible_volume_angstrom3\":" << result.accessibleVolumeAngstromCubed
+            << ",\"inaccessible_volume_angstrom3\":" << result.inaccessibleVolumeAngstromCubed
+            << ",\"total_volume_angstrom3\":" << result.totalVolumeAngstromCubed << "}";
+        std::cout << oss.str() << "\n";
+    } else {
+        std::cout << "Final result:\n"
+                  << "  largest cavity diameter (LCD)    = " << result.largestCavityDiameterAngstrom
+                  << " Ang\n"
+                  << "  pore limiting diameter (PLD)     = " << result.poreLimitingDiameterAngstrom
+                  << " Ang\n"
+                  << "  accessible surface area (ASA)    = " << result.accessibleSurfaceAreaAngstromSq
+                  << " Ang^2\n"
+                  << "  inaccessible surface area (NASA) = " << result.inaccessibleSurfaceAreaAngstromSq
+                  << " Ang^2\n"
+                  << "  accessible volume (AV)           = " << result.accessibleVolumeAngstromCubed
+                  << " Ang^3\n"
+                  << "  inaccessible volume (NAV)        = " << result.inaccessibleVolumeAngstromCubed
+                  << " Ang^3\n"
+                  << "  total unit cell volume           = " << result.totalVolumeAngstromCubed
+                  << " Ang^3\n";
+    }
+    return kExitSuccess;
+}
+
 // ------------------------------------------------------------ validate ---
 
-// CLAUDE.md milestone: only `gcmc run` exists as an executable subcommand
-// (engines/geometry_analysis and engines/dynamics are NotImplemented), but
-// `validate` still recognizes [pore]/[md] config files -- their schemas are
-// real (io/config.hpp) and checking them is honest, useful groundwork,
-// distinct from claiming the engine itself runs. Real schema validation
-// happens first (so a genuinely malformed [pore]/[md] config still gets a
-// precise key/line error, same as [gcmc]); only after that succeeds does
-// this say plainly that there is no engine for it yet -- never silently
-// "valid" in a way that could be mistaken for "runnable" (invariant #7: no
-// stub presented as complete).
+// `gcmc run` and `pore analyze` are real, executable subcommands
+// (engines/geometry_analysis is now implemented); `md run` still is not
+// (engines/dynamics remains NotImplemented). `validate` still recognizes
+// an `[md]` config file -- its schema is real (io/config.hpp) and checking
+// it is honest, useful groundwork, distinct from claiming the engine
+// itself runs. Real schema validation happens first (so a genuinely
+// malformed `[md]` config still gets a precise key/line error, same as
+// `[gcmc]`/`[pore]`); only after that succeeds does this say plainly that
+// there is no engine for it yet -- never silently "valid" in a way that
+// could be mistaken for "runnable" (invariant #7: no stub presented as
+// complete).
 int runValidateCommand(const std::filesystem::path& configPath) {
     const auto kind = aleator::io::detectConfigKind(configPath);
     switch (kind) {
@@ -477,11 +604,10 @@ int runValidateCommand(const std::filesystem::path& configPath) {
         case aleator::io::ConfigKind::Pore: {
             const auto cfg = aleator::io::loadPoreConfig(configPath);
             const auto structure = aleator::io::readCif(cfg.pore.frameworkCif);
-            std::cout << configPath.string() << ": schema-valid [pore] config (\"" << cfg.run.name
-                      << "\", " << structure.particles.size()
-                      << " framework atoms), but pore-geometry analysis is not implemented in this "
-                         "build yet -- there is no `aleator pore analyze`\n";
-            return kExitNotImplemented;
+            poreRadiiFor(structure); // validates every element has a known radius too
+            std::cout << configPath.string() << ": valid [pore] config (\"" << cfg.run.name << "\", "
+                      << structure.particles.size() << " framework atoms)\n";
+            return kExitSuccess;
         }
         case aleator::io::ConfigKind::Md: {
             const auto cfg = aleator::io::loadMdConfig(configPath);
@@ -601,6 +727,19 @@ int main(int argc, char** argv) {
                 return kExitConfigError;
             }
             return runGcmcCommand(std::string(parsed.positional[0]), parsed.dryRun, parsed.json);
+        }
+        if (rawArgs.front() == "pore") {
+            if (rawArgs.size() < 2 || rawArgs[1] != "analyze") {
+                std::cerr << "error: usage: aleator pore analyze <config.toml> [--dry-run] [--json]\n";
+                return kExitConfigError;
+            }
+            const auto parsed =
+                parseFlags(std::vector<std::string_view>(rawArgs.begin() + 2, rawArgs.end()));
+            if (parsed.positional.size() != 1) {
+                std::cerr << "error: usage: aleator pore analyze <config.toml> [--dry-run] [--json]\n";
+                return kExitConfigError;
+            }
+            return runPoreCommand(std::string(parsed.positional[0]), parsed.dryRun, parsed.json);
         }
         if (rawArgs.front() == "validate") {
             if (rawArgs.size() != 2) {

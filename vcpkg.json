@@ -10,7 +10,8 @@
     "catch2",
     "benchmark",
     "tomlplusplus",
-    "spdlog"
+    "spdlog",
+    "voro"
   ],
   "default-features": [
     "python"

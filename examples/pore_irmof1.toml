@@ -1,11 +1,14 @@
 # Pore-geometry analysis of IRMOF-1.
 #
-# engines/geometry_analysis is not implemented yet in this build (see
-# README.md) -- this config is real and fully valid, and `aleator pore
-# analyze` will load and validate it, and the real structure file,
-# completely; running it (without --dry-run) will surface a clean
-# NotImplemented message and exit code 2 rather than doing nothing
-# silently or crashing.
+# engines/geometry_analysis is implemented (see README.md): `aleator pore
+# analyze` on this config runs a real periodic radical Voronoi analysis
+# (LCD, PLD, ASA, AV). IRMOF-1 expands to 424 framework atoms (Fm-3m, #225
+# symmetry) -- noticeably bigger than the LTA/MFI/FAU structures this
+# engine is validated against (72-576 atoms, ~5s-a few minutes each), so a
+# real (non-dry-run) analysis of this config is a genuine multi-minute
+# computation, not a quick smoke test. Use --dry-run to validate the
+# config and structure file (including that every element has a known
+# probe radius) without paying that cost.
 
 [run]
 name = "irmof1-pore-geometry"

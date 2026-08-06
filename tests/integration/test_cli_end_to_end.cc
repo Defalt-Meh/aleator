@@ -77,21 +77,23 @@ TEST_CASE("aleator --help exits 0 and documents only subcommands backed by worki
     // CLAUDE.md CLI milestone: "expose ONLY subcommands backed by working
     // engines... adding a subcommand that prints NotImplemented is worse
     // than omitting it -- it advertises capability the tool doesn't have."
-    // pore/md config *schemas* still exist and `validate` still recognizes
-    // them (see below), but `pore analyze`/`md run` must not appear as if
-    // they were real, runnable subcommands.
+    // engines/geometry_analysis is now implemented, so `pore analyze` is a
+    // real, runnable usage line; `md run` must still not appear as one
+    // (engines/dynamics remains NotImplemented) -- the `[md]` config
+    // *schema* still exists and `validate` still recognizes it (see
+    // below).
     const auto result = runCommand("\"" + cliBinary().string() + "\" --help");
     REQUIRE(result.exitCode == 0);
     REQUIRE(result.output.find("gcmc run") != std::string::npos);
+    REQUIRE(result.output.find("pore analyze") != std::string::npos);
     REQUIRE(result.output.find("validate") != std::string::npos);
     REQUIRE(result.output.find("bench") != std::string::npos);
+    REQUIRE(result.output.find("aleator pore analyze") != std::string::npos);
     // Not just absent from a command list -- not present as a runnable
-    // usage line at all (the help text does mention the bare words "pore
-    // analyze"/"md run" in prose, explaining why they don't exist; that's
-    // fine and intended. What must never appear is the usage-line form,
-    // implying they're invokable the way `aleator gcmc run <config.toml>`
-    // is.)
-    REQUIRE(result.output.find("aleator pore analyze") == std::string::npos);
+    // usage line at all (the help text does mention the bare words "md
+    // run" in prose, explaining why it doesn't exist; that's fine and
+    // intended. What must never appear is the usage-line form, implying
+    // it's invokable the way `aleator gcmc run <config.toml>` is.)
     REQUIRE(result.output.find("aleator md run") == std::string::npos);
 }
 
@@ -107,16 +109,18 @@ TEST_CASE("aleator with an unrecognized command exits 1 with a clear message",
     REQUIRE(result.output.find("unrecognized command") != std::string::npos);
 }
 
-TEST_CASE("aleator pore analyze / aleator md run are unrecognized commands, not NotImplemented "
-          "subcommands",
+TEST_CASE("aleator pore analyze is a real subcommand; aleator md run is still an unrecognized "
+          "command, not a NotImplemented subcommand",
           "[integration][cli]") {
-    // CLAUDE.md CLI milestone: these must not exist as subcommands at all
-    // (see the --help test above) -- confirm the dispatcher genuinely
-    // doesn't recognize them, rather than silently routing "pore"/"md" to
-    // something.
+    // engines/geometry_analysis is now implemented, so "pore" is a
+    // recognized first argument -- a nonexistent config file fails with a
+    // config-loading error (exit 1), NOT "unrecognized command \"pore\"".
+    // engines/dynamics is still NotImplemented, so "md" must still not be
+    // recognized at all (CLAUDE.md CLI milestone: no subcommand that would
+    // just print NotImplemented when run).
     const auto poreResult = runCommand("\"" + cliBinary().string() + "\" pore analyze x.toml");
     REQUIRE(poreResult.exitCode == 1);
-    REQUIRE(poreResult.output.find("unrecognized command \"pore\"") != std::string::npos);
+    REQUIRE(poreResult.output.find("unrecognized command") == std::string::npos);
 
     const auto mdResult = runCommand("\"" + cliBinary().string() + "\" md run x.toml");
     REQUIRE(mdResult.exitCode == 1);
@@ -187,17 +191,32 @@ TEST_CASE("examples/gcmc_ch4_irmof1.toml runs the real, validated 0.1 bar GCMC p
     std::filesystem::remove_all(outputDir);
 }
 
-TEST_CASE("aleator validate on examples/pore_irmof1.toml is schema-valid but honestly reports "
-          "no engine exists for it yet",
+TEST_CASE("aleator validate on examples/pore_irmof1.toml is genuinely valid -- "
+          "engines/geometry_analysis is implemented",
           "[integration][cli]") {
     const auto configPath = examplesDir() / "pore_irmof1.toml";
     REQUIRE(std::filesystem::exists(configPath));
 
     const auto result =
         runCommand("\"" + cliBinary().string() + "\" validate \"" + configPath.string() + "\"");
-    REQUIRE(result.exitCode == 2);
-    REQUIRE(result.output.find("not implemented") != std::string::npos);
-    REQUIRE(result.output.find("schema-valid") != std::string::npos);
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.output.find("valid [pore] config") != std::string::npos);
+    REQUIRE(result.output.find("424 framework atoms") != std::string::npos);
+}
+
+TEST_CASE("aleator pore analyze --dry-run on examples/pore_irmof1.toml validates and prints the "
+          "resolved config without running the analysis",
+          "[integration][cli]") {
+    const auto configPath = examplesDir() / "pore_irmof1.toml";
+    REQUIRE(std::filesystem::exists(configPath));
+
+    const auto dryRunResult = runCommand("\"" + cliBinary().string() + "\" pore analyze \"" +
+                                          configPath.string() + "\" --dry-run --json");
+    REQUIRE(dryRunResult.exitCode == 0);
+    REQUIRE(dryRunResult.output.find("\"framework_cif\"") != std::string::npos);
+    REQUIRE(dryRunResult.output.find("\"probe_radius_angstrom\"") != std::string::npos);
+    // --dry-run must not write anything.
+    REQUIRE_FALSE(std::filesystem::exists(examplesDir() / "out" / "resolved_config.json"));
 }
 
 TEST_CASE("aleator validate on examples/md_irmof1.toml is schema-valid but honestly reports no "

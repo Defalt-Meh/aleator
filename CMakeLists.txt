@@ -71,6 +71,16 @@ target_include_directories(aleator_version INTERFACE
 find_package(hwy CONFIG REQUIRED)
 find_package(tomlplusplus CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+# engines/geometry_analysis milestone: Voro++ (github.com/chr1shr/voro), the
+# standard building block for periodic Voronoi decomposition -- a mature,
+# BSD-3-licensed library rather than a reimplementation, since a correct,
+# numerically-robust periodic *weighted* (radical/Laguerre, needed because
+# framework atoms have different radii) Voronoi decomposition is itself a
+# research-grade computational-geometry undertaking. Available both via
+# vcpkg (port "voro") and system packages (Ubuntu 24.04: libvoro++-dev, in
+# universe) -- verified against the real package index, not assumed, per
+# CLAUDE.md's portability contract.
+find_package(VORO CONFIG REQUIRED)
 
 if(ALEATOR_ENABLE_MPI)
     find_package(MPI REQUIRED COMPONENTS CXX)

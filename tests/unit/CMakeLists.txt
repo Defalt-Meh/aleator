@@ -6,6 +6,7 @@ add_executable(aleator_unit_tests
     test_lattice_geometry.cc
     test_lennard_jones_mixing.cc
     test_monte_carlo_capability_guard.cc
+    test_periodic_graph.cc
     test_simd_kernels.cc
 )
 aleator_configure_target(aleator_unit_tests)
@@ -19,6 +20,7 @@ target_link_libraries(aleator_unit_tests
         aleator::core::geometry
         aleator::core::neighbor
         aleator::engines::monte_carlo
+        aleator::engines::geometry_analysis
         aleator::forcefield::electrostatics
         aleator::forcefield::pairwise
         aleator::io
