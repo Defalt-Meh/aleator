@@ -283,3 +283,79 @@ TEST_CASE("a framework_lj that doesn't cover every CIF element is rejected with 
 
     std::filesystem::remove(path);
 }
+
+namespace {
+/// A minimal, real, valid GCMC config against real IRMOF-1 (25.832 Ang
+/// cubic cell), with `cutoffAngstrom` and an optional `supercell` override
+/// substituted in -- used by the supercell tests below, which only care
+/// about config validation / --dry-run behavior, never a real run.
+std::filesystem::path writeSupercellTestConfig(const std::string& name, double cutoffAngstrom,
+                                                const std::string& supercellLine) {
+    const auto configPath = examplesDir() / "IRMOF-1.cif";
+    return writeTemp(name, "[run]\nname = \"test\"\n\n[gcmc]\nframework_cif = \"" +
+                                configPath.string() + "\"\ntemperature_kelvin = 298.0\n" +
+                                "pressure_bar = 1.0\ncutoff_angstrom = " +
+                                std::to_string(cutoffAngstrom) + "\n" + supercellLine +
+                                "\n[gcmc.adsorbate]\nname = \"CH4\"\nepsilon_kelvin = 158.5\n"
+                                "sigma_angstrom = 3.72\nmass_amu = 16.04246\n\n"
+                                "[[gcmc.framework_lj]]\nelement = \"Zn\"\nepsilon_kelvin = 62.3992\n"
+                                "sigma_angstrom = 2.46155\n\n"
+                                "[[gcmc.framework_lj]]\nelement = \"O\"\nepsilon_kelvin = 48.1581\n"
+                                "sigma_angstrom = 3.03315\n\n"
+                                "[[gcmc.framework_lj]]\nelement = \"C\"\nepsilon_kelvin = 47.8562\n"
+                                "sigma_angstrom = 3.47299\n\n"
+                                "[[gcmc.framework_lj]]\nelement = \"H\"\nepsilon_kelvin = 7.64893\n"
+                                "sigma_angstrom = 2.84642\n");
+}
+} // namespace
+
+TEST_CASE("gcmc.supercell below the computed minimum is rejected, naming the computed minimum",
+          "[integration][cli][supercell]") {
+    // Real IRMOF-1 cell edge 25.832 Ang; cutoff=15.0 needs perpendicular
+    // width > 30.0, i.e. 2x2x2 (1x1x1 gives 25.832, not > 30.0). Requesting
+    // 1x1x1 explicitly must be rejected, not silently upgraded or ignored.
+    const auto path = writeSupercellTestConfig("aleator_cli_supercell_too_small.toml", 15.0,
+                                                "supercell = [1, 1, 1]\n");
+
+    const auto result =
+        runCommand("\"" + cliBinary().string() + "\" gcmc run \"" + path.string() + "\" --dry-run");
+    REQUIRE(result.exitCode == 1);
+    REQUIRE(result.output.find("gcmc.supercell") != std::string::npos);
+    REQUIRE(result.output.find("2x2x2") != std::string::npos); // the computed minimum, named
+    REQUIRE(result.output.find("never downward") != std::string::npos);
+
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("aleator gcmc run --dry-run --json reports the chosen supercell replication",
+          "[integration][cli][supercell]") {
+    // No cutoff override -- default 12.0 Ang cutoff, real IRMOF-1's own
+    // single cell already satisfies minimum image (perpendicular width
+    // 25.832 > 24.0), so the computed minimum is 1x1x1: this is the
+    // "no replication needed" case, not just the "replication happened"
+    // case, and both must be reported honestly.
+    const auto noOverridePath =
+        writeSupercellTestConfig("aleator_cli_supercell_default.toml", 12.0, "");
+    const auto noOverrideResult = runCommand("\"" + cliBinary().string() + "\" gcmc run \"" +
+                                              noOverridePath.string() + "\" --dry-run --json");
+    REQUIRE(noOverrideResult.exitCode == 0);
+    REQUIRE(noOverrideResult.output.find("\"supercell\":[1,1,1]") != std::string::npos);
+    std::filesystem::remove(noOverridePath);
+
+    // cutoff=15.0 needs 2x2x2 -- the auto-computed (non-default) case.
+    const auto autoPath = writeSupercellTestConfig("aleator_cli_supercell_auto.toml", 15.0, "");
+    const auto autoResult = runCommand("\"" + cliBinary().string() + "\" gcmc run \"" +
+                                        autoPath.string() + "\" --dry-run --json");
+    REQUIRE(autoResult.exitCode == 0);
+    REQUIRE(autoResult.output.find("\"supercell\":[2,2,2]") != std::string::npos);
+    std::filesystem::remove(autoPath);
+
+    // An explicit, valid (upward) override is honored and reported as such.
+    const auto overridePath = writeSupercellTestConfig("aleator_cli_supercell_override.toml", 15.0,
+                                                         "supercell = [3, 3, 3]\n");
+    const auto overrideResult = runCommand("\"" + cliBinary().string() + "\" gcmc run \"" +
+                                            overridePath.string() + "\" --dry-run --json");
+    REQUIRE(overrideResult.exitCode == 0);
+    REQUIRE(overrideResult.output.find("\"supercell\":[3,3,3]") != std::string::npos);
+    std::filesystem::remove(overridePath);
+}

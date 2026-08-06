@@ -55,6 +55,7 @@
 
 #include "core/exceptions.hpp"
 #include "core/geometry/lattice.hpp"
+#include "core/geometry/supercell.hpp"
 #include "core/math/counter_based_rng.hpp"
 #include "core/math/particle_data.hpp"
 #include "core/neighbor/verlet_list.hpp"
@@ -159,17 +160,90 @@ struct PreparedGcmc {
     std::uint32_t adsorbateSpeciesIndex;
     double fugacityPascal;
     bool idealGas;
+    /// The (nx, ny, nz) supercell replication actually used -- either
+    /// automatically computed (core::minimumSupercellReplication) or the
+    /// config's gcmc.supercell override, whichever applies. (1,1,1) means
+    /// the framework's own single cell already satisfied minimum image at
+    /// gcmc.cutoff_angstrom and no replication was needed.
+    std::array<int, 3> supercell;
 };
 
-/// Loads the framework structure and builds the LJ force field + adsorbate
-/// species template — everything a real run needs, and everything
-/// --dry-run should validate but not act on. Throws if the CIF is
-/// malformed or if `gcmc.framework_lj` doesn't cover every element the CIF
-/// actually contains (a config that's silently missing a species is
-/// exactly the kind of failure that should surface at startup, not as a
-/// wrong energy mid-run).
+/// Loads the framework structure, replicates it into a supercell large
+/// enough to satisfy minimum image at gcmc.cutoff_angstrom (CLAUDE.md
+/// milestone: "automatic supercell replication... cutoff << L is the
+/// common case in screening, not the exception"), and builds the LJ force
+/// field + adsorbate species template — everything a real run needs, and
+/// everything --dry-run should validate but not act on. Throws if the CIF
+/// is malformed, if gcmc.supercell requests a replication below the
+/// computed minimum (CLAUDE.md invariant #11: rejected at validation time,
+/// naming the computed minimum), or if `gcmc.framework_lj` doesn't cover
+/// every element the CIF actually contains (a config that's silently
+/// missing a species is exactly the kind of failure that should surface at
+/// startup, not as a wrong energy mid-run).
 PreparedGcmc prepareGcmc(const aleator::io::GcmcRunConfig& cfg) {
     auto structure = aleator::io::readCif(cfg.gcmc.frameworkCif);
+
+    // Supercell replication. minimumSupercellReplication depends on the
+    // framework's REAL lattice (perpendicularWidth, not just the declared
+    // cutoff), so this can only happen here, after readCif -- io/config.cc
+    // only checks gcmc.supercell's syntax (positive integers), not whether
+    // it's large enough, for that same reason.
+    const auto minimumReplication =
+        aleator::core::minimumSupercellReplication(structure.lattice, cfg.gcmc.cutoffAngstrom);
+    std::array<int, 3> supercell = minimumReplication;
+    if (cfg.gcmc.supercellOverride.has_value()) {
+        const auto& requested = *cfg.gcmc.supercellOverride;
+        static constexpr const char* kAxisNames[3] = {"x", "y", "z"};
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            if (requested[axis] < minimumReplication[axis]) {
+                throw std::runtime_error(
+                    "gcmc.supercell requests " + std::to_string(requested[0]) + "x" +
+                    std::to_string(requested[1]) + "x" + std::to_string(requested[2]) +
+                    ", but the minimum replication required to satisfy minimum image at "
+                    "cutoff_angstrom=" +
+                    std::to_string(cfg.gcmc.cutoffAngstrom) + " for this framework's lattice is " +
+                    std::to_string(minimumReplication[0]) + "x" +
+                    std::to_string(minimumReplication[1]) + "x" +
+                    std::to_string(minimumReplication[2]) + " (axis " + kAxisNames[axis] +
+                    ": requested " + std::to_string(requested[axis]) + " < required " +
+                    std::to_string(minimumReplication[axis]) +
+                    ") -- gcmc.supercell may only override the computed minimum upward, "
+                    "never downward");
+            }
+        }
+        supercell = requested;
+    }
+    if (supercell != std::array<int, 3>{1, 1, 1}) {
+        auto replicated = aleator::core::replicateSupercell(
+            structure.particles, structure.lattice, supercell[0], supercell[1], supercell[2]);
+        // occupancy/sourceLabel are StructureData's own "parallel to
+        // particles" CIF metadata (io/structure_io.hpp) -- core::
+        // replicateSupercell only knows about core::ParticleData, so they
+        // are re-tiled here in lockstep (same cell-then-particle order
+        // replicateSupercell.cc itself iterates in) rather than left at
+        // their original, now-mismatched-length, size.
+        const std::size_t originalCount = structure.particles.size();
+        const std::size_t totalCells = replicated.particles.size() / originalCount;
+        std::vector<double> newOccupancy;
+        std::vector<std::string> newSourceLabel;
+        newOccupancy.reserve(replicated.particles.size());
+        newSourceLabel.reserve(replicated.particles.size());
+        for (std::size_t cell = 0; cell < totalCells; ++cell) {
+            for (std::size_t p = 0; p < originalCount; ++p) {
+                newOccupancy.push_back(structure.occupancy[p]);
+                newSourceLabel.push_back(structure.sourceLabel[p]);
+            }
+        }
+        structure.particles = std::move(replicated.particles);
+        structure.lattice = replicated.lattice;
+        structure.occupancy = std::move(newOccupancy);
+        structure.sourceLabel = std::move(newSourceLabel);
+    }
+    // Defensive re-check of the invariant the replication above exists to
+    // guarantee, reusing the same validated check the rest of the codebase
+    // relies on (CLAUDE.md invariant #10) rather than trusting the
+    // replication math silently.
+    structure.lattice.validateCutoff(cfg.gcmc.cutoffAngstrom);
 
     std::vector<aleator::forcefield::LennardJonesParameters> ljParameters(
         structure.speciesSymbols.size());
@@ -208,7 +282,7 @@ PreparedGcmc prepareGcmc(const aleator::io::GcmcRunConfig& cfg) {
     }
 
     return {std::move(structure),   std::move(forceField), std::move(adsorbate),
-            adsorbateSpeciesIndex, fugacityPascal,         idealGas};
+            adsorbateSpeciesIndex, fugacityPascal,         idealGas, supercell};
 }
 
 /// CLAUDE.md invariant #11 ("configuration keys are honored or rejected"):
@@ -242,7 +316,8 @@ std::shared_ptr<const aleator::engines::FrameworkEnergyGrid> buildFrameworkEnerg
 /// `gcmc run --dry-run --json`'s stdout output and the real-run
 /// `resolved_config.json` artifact (writeResolvedConfig) -- one serializer,
 /// not two that could silently drift apart.
-std::string resolvedConfigJson(const aleator::io::GcmcRunConfig& cfg) {
+std::string resolvedConfigJson(const aleator::io::GcmcRunConfig& cfg,
+                                const std::array<int, 3>& supercell) {
     const auto& run = cfg.run;
     const auto& g = cfg.gcmc;
     std::ostringstream oss;
@@ -262,7 +337,8 @@ std::string resolvedConfigJson(const aleator::io::GcmcRunConfig& cfg) {
         << "\",\"temperature_kelvin\":" << g.temperatureKelvin
         << ",\"pressure_bar\":" << g.pressureBar << ",\"cutoff_angstrom\":" << g.cutoffAngstrom
         << ",\"equilibration_steps\":" << g.equilibrationSteps
-        << ",\"production_steps\":" << g.productionSteps << ",\"energy_grid_spacing_angstrom\":"
+        << ",\"production_steps\":" << g.productionSteps << ",\"supercell\":[" << supercell[0]
+        << "," << supercell[1] << "," << supercell[2] << "],\"energy_grid_spacing_angstrom\":"
         << (g.energyGridSpacingAngstrom.has_value() ? std::to_string(*g.energyGridSpacingAngstrom)
                                                       : "null")
         << ",\"adsorbate\":{\"name\":\"" << jsonEscape(g.adsorbate.name)
@@ -284,11 +360,12 @@ std::string resolvedConfigJson(const aleator::io::GcmcRunConfig& cfg) {
     return oss.str();
 }
 
-void printGcmcConfig(const aleator::io::GcmcRunConfig& cfg, bool json) {
+void printGcmcConfig(const aleator::io::GcmcRunConfig& cfg, const std::array<int, 3>& supercell,
+                      bool json) {
     const auto& run = cfg.run;
     const auto& g = cfg.gcmc;
     if (json) {
-        std::cout << resolvedConfigJson(cfg) << "\n";
+        std::cout << resolvedConfigJson(cfg, supercell) << "\n";
         return;
     }
 
@@ -301,6 +378,11 @@ void printGcmcConfig(const aleator::io::GcmcRunConfig& cfg, bool json) {
               << "gcmc.temperature_kelvin        = " << g.temperatureKelvin << "\n"
               << "gcmc.pressure_bar              = " << g.pressureBar << "\n"
               << "gcmc.cutoff_angstrom           = " << g.cutoffAngstrom << "\n"
+              << "gcmc.supercell                 = " << supercell[0] << "x" << supercell[1] << "x"
+              << supercell[2]
+              << (cfg.gcmc.supercellOverride.has_value() ? " (from gcmc.supercell)"
+                                                          : " (auto-computed minimum)")
+              << "\n"
               << "gcmc.equilibration_steps       = " << g.equilibrationSteps << "\n"
               << "gcmc.production_steps          = " << g.productionSteps << "\n"
               << "gcmc.energy_grid_spacing_angstrom = "
@@ -338,7 +420,7 @@ constexpr double kAvogadro = 6.02214076e23;
 /// asks for: "a published result can be reproduced from its artifacts
 /// alone." Only called for a real run -- see printUsage()/runGcmcCommand's
 /// doc comments for why --dry-run doesn't write anything.
-void writeResolvedConfig(const aleator::io::GcmcRunConfig& cfg) {
+void writeResolvedConfig(const aleator::io::GcmcRunConfig& cfg, const std::array<int, 3>& supercell) {
     std::filesystem::create_directories(cfg.run.outputDirectory);
     const auto path = cfg.run.outputDirectory / "resolved_config.json";
     std::ofstream out(path);
@@ -347,7 +429,7 @@ void writeResolvedConfig(const aleator::io::GcmcRunConfig& cfg) {
                                   "= " +
                                   cfg.run.outputDirectory.string() + ")");
     }
-    out << resolvedConfigJson(cfg);
+    out << resolvedConfigJson(cfg, supercell);
     spdlog::info("wrote resolved configuration (incl. run.rng_seed={}) to {}", cfg.run.rngSeed,
                  path.string());
 }
@@ -356,15 +438,16 @@ int runGcmcCommand(const std::filesystem::path& configPath, bool dryRun, bool js
     const aleator::io::GcmcRunConfig cfg = aleator::io::loadGcmcConfig(configPath);
 
     if (dryRun) {
-        prepareGcmc(cfg); // validates the CIF and species coverage too
-        printGcmcConfig(cfg, json);
+        const PreparedGcmc prepared = prepareGcmc(cfg); // validates the CIF and species coverage too
+        printGcmcConfig(cfg, prepared.supercell, json);
         return kExitSuccess;
     }
 
     PreparedGcmc prepared = prepareGcmc(cfg);
-    spdlog::info("loaded {} framework atoms ({} species) from {}",
+    spdlog::info("loaded {} framework atoms ({} species) from {} (supercell {}x{}x{})",
                  prepared.structure.particles.size(), prepared.structure.speciesSymbols.size(),
-                 cfg.gcmc.frameworkCif.string());
+                 cfg.gcmc.frameworkCif.string(), prepared.supercell[0], prepared.supercell[1],
+                 prepared.supercell[2]);
     if (prepared.idealGas) {
         spdlog::info(
             "no Peng-Robinson critical properties given for \"{}\" -- using ideal-gas fugacity "
@@ -385,7 +468,7 @@ int runGcmcCommand(const std::filesystem::path& configPath, bool dryRun, bool js
     const double frameworkMassKg = frameworkMassAmu * kAmuToKg;
     const double volume = std::abs(prepared.structure.lattice.volume());
 
-    writeResolvedConfig(cfg);
+    writeResolvedConfig(cfg, prepared.supercell);
 
     auto rng = std::make_unique<aleator::core::Philox4x32Rng>();
     rng->seed(cfg.run.rngSeed, /*streamIndex=*/0);

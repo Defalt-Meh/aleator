@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -96,6 +97,18 @@ struct GcmcConfig {
     /// (CLAUDE.md invariant #11: a key the user didn't set must not change
     /// what their run computes).
     std::optional<double> energyGridSpacingAngstrom;
+
+    /// Optional override of the automatically-computed minimum supercell
+    /// replication (core::minimumSupercellReplication, applied in
+    /// src/cli/main.cc's prepareGcmc() once the framework CIF's real
+    /// lattice is known -- this loader only checks each component is a
+    /// positive integer; the CIF-dependent "is this at least the computed
+    /// minimum" check happens there, once the lattice is available).
+    /// Unset means "use the automatically-computed minimum" -- the
+    /// override can only ever raise the replication above that computed
+    /// minimum, never below it (a below-minimum override would violate
+    /// minimum image, CLAUDE.md invariant #10, and is rejected).
+    std::optional<std::array<int, 3>> supercellOverride;
 };
 
 struct GcmcRunConfig {

@@ -8,6 +8,7 @@ add_executable(aleator_unit_tests
     test_monte_carlo_capability_guard.cc
     test_periodic_graph.cc
     test_simd_kernels.cc
+    test_supercell.cc
 )
 aleator_configure_target(aleator_unit_tests)
 

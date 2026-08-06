@@ -198,6 +198,35 @@ GcmcRunConfig loadGcmcConfig(const std::filesystem::path& file) {
                          "gcmc.energy_grid_spacing_angstrom", gcmc, "energy_grid_spacing_angstrom");
     }
 
+    // Supercell replication override (CLAUDE.md milestone: "automatic
+    // supercell replication... a config key to override the computed
+    // replication upward, never downward"). Only syntax/positivity is
+    // checked here -- whether this override is actually >= the computed
+    // minimum requires the framework CIF's real lattice, which this
+    // parse-only loader doesn't read (framework_lj's per-element coverage
+    // check has the same structural reason for living in
+    // src/cli/main.cc's prepareGcmc() instead of here).
+    if (gcmc["supercell"].node() != nullptr) {
+        const auto* supercellArray = gcmc["supercell"].as_array();
+        if (supercellArray == nullptr || supercellArray->size() != 3) {
+            const auto [line, column] = locationOf(gcmc["supercell"].node(), gcmc);
+            throw ConfigError(filePath, "gcmc.supercell",
+                               "expected an array of exactly 3 positive integers [nx, ny, nz]", line,
+                               column);
+        }
+        std::array<int, 3> supercell{};
+        for (std::size_t i = 0; i < 3; ++i) {
+            const auto value = (*supercellArray)[i].value<std::int64_t>();
+            if (!value.has_value() || *value < 1) {
+                const auto [line, column] = locationOf(&(*supercellArray)[i], gcmc);
+                throw ConfigError(filePath, "gcmc.supercell",
+                                   "each entry must be a positive integer (>= 1)", line, column);
+            }
+            supercell[i] = static_cast<int>(*value);
+        }
+        cfg.supercellOverride = supercell;
+    }
+
     const auto* frameworkLjArray = gcmc["framework_lj"].as_array();
     if (frameworkLjArray == nullptr || frameworkLjArray->empty()) {
         const auto [line, column] = locationOf(gcmc["framework_lj"].node(), gcmc);
