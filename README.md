@@ -182,10 +182,23 @@ system:
    show up against a 424-atom framework scan. It matters for the higher-occupancy
    charged CO2/IRMOF-1 system and is real, validated infrastructure either way (CLAUDE.md
    section 3's "cash the bet" on `core/neighbor` actually being used by an engine).
+   `benchmarks/bench_gcmc_co2_irmof1.cc` (added this session) now exercises exactly that
+   higher-occupancy regime directly — the real charged CO2/IRMOF-1 system at its real
+   high-pressure point (1e6 Pa, real DDEC charges, real Ewald electrostatics) — rather
+   than only asserting it matters in prose. Honest limitation: `MonteCarloEngine` has no
+   runtime toggle to force guest-guest interactions back onto the pre-`CellList` O(N²)
+   scan, so this benchmark cannot itself report an on/off delta the way the orthorhombic
+   fast path's before/after numbers above can; what it gives is a real absolute number, at
+   real occupancy (80 molecules reached within this benchmark's fixed step budget,
+   trending toward the reference system's known ~127-molecule equilibrium — full
+   convergence takes far longer than a benchmark's budget allows; see CLAUDE.md defect 1
+   on why 2000 equilibration steps under-converges this exact system), that a future
+   regression removing the `CellList` wiring would actually move, unlike the 23-molecule
+   CH4 benchmark.
 
-2. **A rigid-framework guest-host energy grid was built, validated, and *not* adopted**
-   (`engines/monte_carlo/framework_energy_grid.hpp`, `FrameworkEnergyGrid`): one
-   trilinearly-interpolated energy table per guest LJ species, replacing the
+2. **A rigid-framework guest-host energy grid was built, validated, and *not* adopted for
+   this workload** (`engines/monte_carlo/framework_energy_grid.hpp`, `FrameworkEnergyGrid`):
+   one trilinearly-interpolated energy table per guest LJ species, replacing the
    O(frameworkCount) direct scan with an O(1) lookup — the literal "tabulate the guest-
    host field once" idea. It works (a real accuracy-vs-spacing-vs-build-time sweep is in
    `tests/validation/test_framework_energy_grid.cc`, with a raw-node cap
@@ -196,10 +209,12 @@ system:
    this exact 25.832 Å single-unit-cell system (12.0 Å cutoff, close to `L_perp/2`), a
    spacing coarse enough to build quickly (0.5 Å, ~11 s) was *not* accurate enough — it
    more than doubled this test's own tight self-consistency deviation past its 12% gate
-   (22.6%, vs. 3.4% without it) — and a spacing accurate enough to pass (0.2 Å) cost
-   **~165 s to build once**, over 5× this entire 4-point isotherm's *pre-optimization*
-   runtime. Root cause: a single unit cell with `cutoff ≈ L_perp/2` means nearly the
-   whole framework is "in range" of any point in the cell, so neither a cell list nor a
+   (22.6%, vs. 3.4% without it) — and a spacing accurate enough to pass (0.2 Å) cost real,
+   substantial one-time build time (see the "FrameworkEnergyGrid persistence" section
+   below for the current, freshly re-measured number — the ~165 s originally recorded here
+   turned out to be stale by more than 10x, itself part of what that section corrects).
+   Root cause: a single unit cell with `cutoff ≈ L_perp/2` means nearly the whole
+   framework is "in range" of any point in the cell, so neither a cell list nor a
    precomputed grid can avoid touching most of it — this is the same underlying
    constraint the methane/IRMOF-1 known-deviation writeup and the CO2/IRMOF-1 supercell
    already ran into (see `CLAUDE.md` section 0, defect 1). `FrameworkEnergyGrid` is real,
@@ -231,7 +246,121 @@ loading values before and after (same seed, same output to every printed digit):
 an exact optimization, not an approximation, so it needed no known-deviation-baseline
 re-justification. `benchmarks/bench_gcmc_ch4_irmof1.cc` tracks a synthetic-system
 equivalent of this workload as an ongoing CI-checked baseline (`scripts/
-run_benchmarks.sh`, CLAUDE.md's >5% regression gate).
+run_benchmarks.sh`, CLAUDE.md's >5% regression gate). A fresh re-run of that same
+benchmark this session (same code path, same 480,000-step workload, this machine)
+measured **2.3–2.4 s**, not 3.97 s — noted honestly rather than silently updated: this
+could be machine-load variance between sessions rather than a further code change, and
+is not being claimed as a new deliberate optimization.
+
+### FrameworkEnergyGrid persistence: making the grid pay
+
+The measurement above ("grid not adopted") was correct on its own terms but is not the
+whole story, for two reasons the earlier text didn't separate out — this session's
+milestone was to fix that, not to re-litigate whether the grid is a good idea in the
+abstract.
+
+**Reason 1: the grid could not persist.** A grid's entire value proposition is
+amortization — build once, reuse across every pressure point, repeat run, and
+subsequent job. The prior measurement built a grid, used it for exactly one workload,
+then discarded it — comparing a grid's *one-time, unamortized* cost against the
+no-grid baseline is the least favorable comparison possible for a cache-shaped
+optimization, by construction. `FrameworkEnergyGrid` now serializes
+(`FrameworkEnergyGrid::serialize`/`loadFromCache`, `engines/monte_carlo/
+framework_energy_grid.hpp`/`.cc`): a content-addressed cache file, keyed on a 64-bit
+FNV-1a hash (used only to pick a filename) of *every* input that determines the grid's
+contents — framework atom positions/species, lattice, per-species LJ parameters,
+cutoff, truncation scheme, guest species, spacing, and the energy cap — with the full
+key also stored in the file and compared field-by-field (exact, not hashed) on load.
+A version or key mismatch is a hard `std::runtime_error`, never a silent rebuild and
+never a silent reuse (CLAUDE.md section 5: "a stale grid silently producing wrong
+energies is the worst failure mode in this project"). Validated directly
+(`tests/validation/test_framework_energy_grid_cache.cc`, 4 test cases / 35 assertions):
+a round-trip gives bit-identical interpolated energies (raw comparison, not tolerance),
+and mutating any single one of the key's 12 fields is confirmed to produce a real cache
+miss — plus a simulated hash-collision/corrupted-cache scenario is confirmed to hard-error
+rather than silently load the wrong grid. Cache location is a new config key,
+`gcmc.energy_grid_cache_directory` (default `energy_grid_cache`, resolved relative to
+the config file's own directory — deliberately *not* `run.output_directory`, since the
+whole point is reuse *across* separate output directories); `--dry-run` and the real-run
+`resolved_config.json` artifact both report whether a run will hit or build.
+
+**Reason 2: the original measurement's system was the worst possible case for a
+grid, and the milestone that added supercell replication (see above) had already made
+a fairer comparison possible without anyone going back to run it.** `cutoff ≈ L_perp/2`
+on a single unit cell means nearly the whole framework is always "in range" — the exact
+condition under which neither a cell list nor a grid can prune much of anything. A real
+2x2x2 IRMOF-1 supercell (3392 atoms, `cutoff = 12.0` Å against `L_perp ≈ 51.664` Å, i.e.
+genuinely `cutoff << L`) was re-measured this session, both for grid *accuracy* and for
+end-to-end GCMC *wall-clock*.
+
+*Accuracy re-measured, not assumed coarser.* The milestone's own expectation was that a
+supercell would tolerate a coarser, cheaper spacing. Directly tested
+(`tests/validation/test_framework_energy_grid.cc`'s second `TEST_CASE`, same
+methodology as the original single-cell sweep — 2000 random query points, direct
+O(frameworkCount) ground truth, mean/median absolute error against a trilinearly
+interpolated grid): the needed spacing came out **essentially unchanged**, not coarser:
+
+| spacing (Å) | single cell: mean/median err (K) | 2x2x2 supercell: mean/median err (K) |
+|---|---|---|
+| 1.0 | 4919.8 / 53.9 | 4943.9 / 59.6 |
+| 0.5 | 2031.9 / 7.0 | 1960.6 / 7.3 |
+| 0.2 | 508.1 / 0.90 | 479.2 / 0.96 |
+
+This makes physical sense on reflection, even though it contradicts the milestone's own
+prediction: interpolation error is a *local* property of how sharply the LJ potential
+curves near each framework atom, which does not change when the same crystal is
+periodically repeated — it is not diluted by system size the way, say, a relative
+isotherm-noise budget might be. **0.2 Å remains the accuracy-validated spacing on both
+system sizes** — the honest correction to make here is not "coarser spacing suffices",
+it's dropping that prediction and reporting what was actually measured.
+
+*Build cost, corrected.* The originally-recorded "~165 s to build once" (0.2 Å, single
+cell) is now stale by more than 10x: a fresh measurement of the exact same construction,
+on the current code, is **15.7 s**. The likely explanation (not independently isolated
+this session, but consistent with the timeline): that figure predates this same
+session-lineage's `Lattice::minimumImageDisplacement` orthorhombic fast path (the actual
+fix described above) — grid construction calls that function once per framework atom per
+grid node, exactly like the direct scan it replaces, so it benefits equally. The
+supercell's grid, at the same 0.2 Å spacing, costs **469.5 s** to build (real, not
+approximated — 3392 atoms × 8x the single cell's grid-point count ⇒ work scales as
+roughly the *square* of the replication factor, ~30x observed against a naive ~64x
+prediction).
+
+*Wall-clock, all four scenarios the milestone asked for (real IRMOF-1.cif, CH4,
+298 K, 0.1 bar, seed 7, 20,000 GCMC steps unless noted; `benchmarks/
+bench_gcmc_ch4_irmof1.cc` and `benchmarks/bench_framework_energy_grid_gcmc.cc`,
+this machine):*
+
+| Scenario | Grid build/load | 20,000-step GCMC loop | Total (one run) |
+|---|---|---|---|
+| Single cell, no grid | — | 100.9 ms *(scaled from the 480,000-step baseline, 2.3–2.4 s)* | 100.9 ms |
+| Single cell, grid (cold) | 15.7 s | 8.4 ms | **15.7 s — loses, confirmed** |
+| 2x2x2 supercell, no grid | — | 601 ms | 601 ms |
+| 2x2x2 supercell, grid (**cold**) | 469.5 s | 18.7 ms | **469.5 s — loses badly** |
+| 2x2x2 supercell, grid (**warm**, cache hit) | 0.040 s | 18.7 ms | **58.7 ms — wins** |
+
+The per-step GCMC cost with the grid enabled drops sharply either way (single cell:
+0.42 µs/step vs. 5.0 µs/step without; supercell: 0.94 µs/step vs. 30.1 µs/step without —
+slightly higher than the single-cell grid case because a bigger box reaches higher real
+guest occupancy at equilibrium, so guest-guest `CellList` work, unrelated to the grid,
+makes up a larger share of the per-step cost). But **a cold build always loses** on any
+single run, on either system size, exactly as the milestone predicted and this session
+confirmed rather than assumed. What changes the verdict is the thing this session's
+milestone actually added: **once the cache is warm, the supercell-with-grid scenario
+(58.7 ms) beats even the single-cell no-grid scenario (100.9 ms) at the same step
+count** — a real, measured amortized win, not a projection, and one that was
+categorically unreachable before this session, since there was no way for a grid to
+survive past the process that built it.
+
+**Honest scope of this result.** This is one pressure point, one guest species, one
+spacing, 20,000 steps — not the full 4-point isotherm, and not a claim that the grid
+should now be the default. The warm-cache win is real and reproducible (`cacheHit()` is
+a cheap header-only check, exercised directly by the round-trip test), but whether it's
+worth enabling for a given job is still a real tradeoff a user must opt into via
+`gcmc.energy_grid_spacing_angstrom` (unset by default, per CLAUDE.md invariant #11 — a
+key a user didn't set must not silently change what their run computes) — the value of
+this session's work is that the tradeoff is now *measurable and reusable* rather than
+paid fresh, and thrown away, on every single run.
 
 ### Pore geometry: periodic radical Voronoi decomposition
 

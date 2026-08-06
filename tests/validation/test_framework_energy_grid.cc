@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "core/geometry/lattice.hpp"
+#include "core/geometry/supercell.hpp"
 #include "core/math/particle_data.hpp"
 #include "engines/monte_carlo/framework_energy_grid.hpp"
 #include "forcefield/pairwise/lennard_jones.hpp"
@@ -36,6 +37,8 @@
 
 using aleator::core::Lattice;
 using aleator::core::ParticleData;
+using aleator::core::minimumSupercellReplication;
+using aleator::core::replicateSupercell;
 using aleator::engines::FrameworkEnergyGrid;
 using aleator::forcefield::LennardJones;
 using aleator::forcefield::LennardJonesParameters;
@@ -163,6 +166,101 @@ TEST_CASE("FrameworkEnergyGrid: interpolation accuracy and construction cost vs.
         // by count) mixed pair is sqrt(158.5*47.8562) ~= 87 K.
         const double wellDepthScaleK =
             std::sqrt(158.5 * 47.8562); // CH4 epsilon * C epsilon, geometric mean
+        std::size_t belowOnePercent = 0;
+        for (double e : absErrors) {
+            if (e < 0.01 * wellDepthScaleK) {
+                ++belowOnePercent;
+            }
+        }
+        const double fracBelowOnePercent =
+            static_cast<double>(belowOnePercent) / static_cast<double>(absErrors.size());
+
+        std::printf("%12.2f %14.2f %16.4f %16.4f %16.4f\n", spacing, buildMs, meanAbsErr,
+                    medianAbsErr, fracBelowOnePercent);
+    }
+}
+
+// CLAUDE.md section 5's FrameworkEnergyGrid-serialization milestone: the single-unit-cell
+// sweep above operates at cutoff ~= L_perp/2 (12.0 Ang cutoff against IRMOF-1's ~25.832 Ang
+// cell), the exact pathological regime section 3 already names as one where "neither a cell
+// list nor a precomputed grid have much to prune". This sweep re-runs the identical
+// methodology (same force field, same cutoff, same random query protocol, same accuracy
+// yardstick) on a 2x2x2 supercell instead, where the same 12.0 Ang cutoff sits at roughly
+// cutoff / L_perp ~= 12.0 / 51.664 ~= 0.23 -- comfortably cutoff << L, not cutoff ~= L/2 --
+// to test whether a coarser, cheaper spacing suffices there, as the milestone predicts.
+TEST_CASE("FrameworkEnergyGrid: interpolation accuracy and construction cost vs. spacing, on "
+          "a 2x2x2 IRMOF-1/CH4 supercell where cutoff << L",
+          "[validation][montecarlo][slow]") {
+    const auto unitCell = aleator::io::readCif(irmof1DataFile("IRMOF-1.cif"));
+    REQUIRE(unitCell.particles.size() > 0);
+
+    const double cutoff = 12.0;
+    const auto minimumReplication = minimumSupercellReplication(unitCell.lattice, cutoff);
+    // The milestone explicitly asks for 2x2x2; confirm that request actually clears the
+    // minimum-image-safe replication for this cutoff and cell rather than silently using
+    // whatever the minimum happens to be, so an assertion failure here means the milestone's
+    // own premise ("2x2x2 supercell where cutoff << L") stopped holding for this system.
+    REQUIRE(minimumReplication[0] <= 2);
+    REQUIRE(minimumReplication[1] <= 2);
+    REQUIRE(minimumReplication[2] <= 2);
+    const auto supercell = replicateSupercell(unitCell.particles, unitCell.lattice, 2, 2, 2);
+
+    std::vector<LennardJonesParameters> ljParameters;
+    for (const auto& symbol : unitCell.speciesSymbols) {
+        ljParameters.push_back(uffParameters(symbol));
+    }
+    const auto ch4SpeciesIndex = static_cast<std::uint32_t>(ljParameters.size());
+    ljParameters.push_back({158.5, 3.72}); // CH4_sp3, RASPA2 GenericMOFs
+
+    const LennardJones forceField(ljParameters, cutoff, LennardJonesTruncation::Shifted);
+
+    std::mt19937 queryRng(20260805);
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    constexpr int kQueryPoints = 2000;
+    std::vector<std::array<double, 3>> queryPoints;
+    queryPoints.reserve(kQueryPoints);
+    for (int i = 0; i < kQueryPoints; ++i) {
+        queryPoints.push_back(supercell.lattice.fractionalToCartesian(
+            {unit(queryRng), unit(queryRng), unit(queryRng)}));
+    }
+
+    std::vector<double> directEnergies;
+    directEnergies.reserve(queryPoints.size());
+    for (const auto& p : queryPoints) {
+        directEnergies.push_back(directGuestHostEnergy(forceField, supercell.particles,
+                                                         supercell.lattice, ch4SpeciesIndex, p));
+    }
+
+    // Coarser candidates than the single-cell sweep: the milestone predicts the needed
+    // spacing here is coarser and cheaper, so the candidate list is widened upward (2.0,
+    // 1.5) as well as retaining the single-cell sweep's finest point (0.2) as a sanity upper
+    // bound on accuracy.
+    const std::vector<double> candidateSpacings{2.0, 1.5, 1.0, 0.5, 0.2};
+
+    std::printf("%12s %14s %16s %16s %16s\n", "spacing(Ang)", "buildTime(ms)", "meanAbsErr(K)",
+                "medianAbsErr(K)", "fracBelow1pctOfWell");
+    for (double spacing : candidateSpacings) {
+        const auto buildStart = std::chrono::steady_clock::now();
+        const FrameworkEnergyGrid grid(forceField, supercell.particles, supercell.lattice,
+                                        {ch4SpeciesIndex}, spacing);
+        const auto buildEnd = std::chrono::steady_clock::now();
+        const double buildMs =
+            std::chrono::duration<double, std::milli>(buildEnd - buildStart).count();
+
+        double sumAbsErr = 0.0;
+        std::vector<double> absErrors;
+        absErrors.reserve(queryPoints.size());
+        for (std::size_t i = 0; i < queryPoints.size(); ++i) {
+            const double interpolated = grid.interpolate(ch4SpeciesIndex, queryPoints[i]);
+            const double err = std::abs(interpolated - directEnergies[i]);
+            sumAbsErr += err;
+            absErrors.push_back(err);
+        }
+        std::sort(absErrors.begin(), absErrors.end());
+        const double meanAbsErr = sumAbsErr / static_cast<double>(absErrors.size());
+        const double medianAbsErr = absErrors[absErrors.size() / 2];
+
+        const double wellDepthScaleK = std::sqrt(158.5 * 47.8562);
         std::size_t belowOnePercent = 0;
         for (double e : absErrors) {
             if (e < 0.01 * wellDepthScaleK) {

@@ -45,6 +45,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -285,31 +286,69 @@ PreparedGcmc prepareGcmc(const aleator::io::GcmcRunConfig& cfg) {
             adsorbateSpeciesIndex, fugacityPascal,         idealGas, supercell};
 }
 
+/// Builds the FrameworkEnergyGridCacheRequest a given config/prepared run
+/// would use -- shared by the real build path and the --dry-run hit/miss
+/// check below, so the two can never compute a different key and disagree
+/// about what's cached.
+aleator::engines::FrameworkEnergyGridCacheRequest frameworkEnergyGridCacheRequest(
+    const aleator::io::GcmcConfig& gcmc, const PreparedGcmc& prepared) {
+    return {gcmc.energyGridCacheDirectory, {prepared.adsorbateSpeciesIndex},
+            *gcmc.energyGridSpacingAngstrom};
+}
+
 /// CLAUDE.md invariant #11 ("configuration keys are honored or rejected"):
 /// `gcmc.energy_grid_spacing_angstrom`, if set, must actually build and use
 /// a FrameworkEnergyGrid, not just be parsed and ignored. Deliberately not
-/// called by prepareGcmc()/on --dry-run: construction is real,
+/// called by prepareGcmc(): a genuine cache-miss build is real,
 /// O(gridPoints * frameworkAtomCount) work (see FrameworkEnergyGrid's doc
 /// comment) that can itself take far longer than a validation pass should
 /// (measured on the CH4/IRMOF-1 system: ~165 s at the spacing accurate
-/// enough to matter -- CLAUDE.md section 5's "Resolved this session"), so
-/// --dry-run intentionally does not pay it.
+/// enough to matter). `--dry-run` instead calls
+/// frameworkEnergyGridCacheHitForDryRun() below, which answers "would this
+/// hit or build" by reading only a cache file's header (if one exists at
+/// the computed path) -- cheap regardless of grid size, unlike either a
+/// build or a full deserialization.
 std::shared_ptr<const aleator::engines::FrameworkEnergyGrid> buildFrameworkEnergyGridIfConfigured(
-    const aleator::io::GcmcConfig& gcmc, const PreparedGcmc& prepared) {
+    const aleator::io::GcmcConfig& gcmc, const PreparedGcmc& prepared, bool* wasHitOut = nullptr) {
     if (!gcmc.energyGridSpacingAngstrom.has_value()) {
         return nullptr;
     }
-    spdlog::info("building guest-host energy grid at {} Ang spacing (gcmc.energy_grid_spacing_angstrom "
-                 "is set) -- this is one-time O(gridPoints * frameworkAtomCount) work...",
-                 *gcmc.energyGridSpacingAngstrom);
+    const auto request = frameworkEnergyGridCacheRequest(gcmc, prepared);
+    spdlog::info("guest-host energy grid requested at {} Ang spacing (cache: {})...",
+                 *gcmc.energyGridSpacingAngstrom, request.cacheDirectory.string());
     const auto buildStart = std::chrono::steady_clock::now();
-    auto grid = std::make_shared<const aleator::engines::FrameworkEnergyGrid>(
-        *prepared.forceField, prepared.structure.particles, prepared.structure.lattice,
-        std::vector<std::uint32_t>{prepared.adsorbateSpeciesIndex}, *gcmc.energyGridSpacingAngstrom);
+    bool wasHit = false;
+    auto grid = std::make_shared<aleator::engines::FrameworkEnergyGrid>(
+        aleator::engines::loadOrBuildFrameworkEnergyGrid(*prepared.forceField,
+                                                           prepared.structure.particles,
+                                                           prepared.structure.lattice, request,
+                                                           &wasHit));
     const auto buildEnd = std::chrono::steady_clock::now();
-    spdlog::info("energy grid built in {:.1f} s",
+    spdlog::info("energy grid {} in {:.3f} s", wasHit ? "loaded from cache" : "built and cached",
                  std::chrono::duration<double>(buildEnd - buildStart).count());
+    if (wasHitOut != nullptr) {
+        *wasHitOut = wasHit;
+    }
     return grid;
+}
+
+/// Cheap "would gcmc run hit the cache or build from scratch" check for
+/// --dry-run: reads only a candidate cache file's header (if one exists),
+/// never builds, never deserializes the (possibly large) grid data. A
+/// hard error from FrameworkEnergyGrid::cacheHit() (a corrupt or colliding
+/// cache file) is allowed to propagate -- --dry-run validating a config
+/// should surface exactly the same problems a real run would, not mask
+/// them.
+std::optional<bool> frameworkEnergyGridCacheHitForDryRun(const aleator::io::GcmcConfig& gcmc,
+                                                           const PreparedGcmc& prepared) {
+    if (!gcmc.energyGridSpacingAngstrom.has_value()) {
+        return std::nullopt;
+    }
+    const auto request = frameworkEnergyGridCacheRequest(gcmc, prepared);
+    const auto key = aleator::engines::makeFrameworkEnergyGridCacheKey(
+        *prepared.forceField, prepared.structure.particles, prepared.structure.lattice,
+        request.guestSpeciesIds, request.spacingAngstrom);
+    return aleator::engines::FrameworkEnergyGrid::cacheHit(request.cacheDirectory, key);
 }
 
 /// Single source of truth for the resolved-config JSON schema, shared by
@@ -317,7 +356,8 @@ std::shared_ptr<const aleator::engines::FrameworkEnergyGrid> buildFrameworkEnerg
 /// `resolved_config.json` artifact (writeResolvedConfig) -- one serializer,
 /// not two that could silently drift apart.
 std::string resolvedConfigJson(const aleator::io::GcmcRunConfig& cfg,
-                                const std::array<int, 3>& supercell) {
+                                const std::array<int, 3>& supercell,
+                                const std::optional<bool>& energyGridCacheHit) {
     const auto& run = cfg.run;
     const auto& g = cfg.gcmc;
     std::ostringstream oss;
@@ -341,6 +381,10 @@ std::string resolvedConfigJson(const aleator::io::GcmcRunConfig& cfg,
         << "," << supercell[1] << "," << supercell[2] << "],\"energy_grid_spacing_angstrom\":"
         << (g.energyGridSpacingAngstrom.has_value() ? std::to_string(*g.energyGridSpacingAngstrom)
                                                       : "null")
+        << ",\"energy_grid_cache_directory\":\"" << jsonEscape(g.energyGridCacheDirectory.string())
+        << "\",\"energy_grid_cache_status\":"
+        << (energyGridCacheHit.has_value() ? (*energyGridCacheHit ? "\"hit\"" : "\"will_build\"")
+                                            : "null")
         << ",\"adsorbate\":{\"name\":\"" << jsonEscape(g.adsorbate.name)
         << "\",\"epsilon_kelvin\":" << g.adsorbate.epsilonKelvin
         << ",\"sigma_angstrom\":" << g.adsorbate.sigmaAngstrom
@@ -361,11 +405,11 @@ std::string resolvedConfigJson(const aleator::io::GcmcRunConfig& cfg,
 }
 
 void printGcmcConfig(const aleator::io::GcmcRunConfig& cfg, const std::array<int, 3>& supercell,
-                      bool json) {
+                      const std::optional<bool>& energyGridCacheHit, bool json) {
     const auto& run = cfg.run;
     const auto& g = cfg.gcmc;
     if (json) {
-        std::cout << resolvedConfigJson(cfg, supercell) << "\n";
+        std::cout << resolvedConfigJson(cfg, supercell, energyGridCacheHit) << "\n";
         return;
     }
 
@@ -388,8 +432,18 @@ void printGcmcConfig(const aleator::io::GcmcRunConfig& cfg, const std::array<int
               << "gcmc.energy_grid_spacing_angstrom = "
               << (g.energyGridSpacingAngstrom.has_value() ? std::to_string(*g.energyGridSpacingAngstrom)
                                                              : "not set (direct O(N) guest-host scan)")
-              << "\n"
-              << "gcmc.adsorbate.name            = " << g.adsorbate.name << "\n"
+              << "\n";
+    if (g.energyGridSpacingAngstrom.has_value()) {
+        std::cout << "gcmc.energy_grid_cache_directory = " << g.energyGridCacheDirectory.string()
+                  << "\n"
+                  << "gcmc.energy_grid_cache_status  = "
+                  << (energyGridCacheHit.has_value()
+                          ? (*energyGridCacheHit ? "hit (will load, not rebuild)"
+                                                  : "miss (will build and cache)")
+                          : "unknown")
+                  << "\n";
+    }
+    std::cout << "gcmc.adsorbate.name            = " << g.adsorbate.name << "\n"
               << "gcmc.adsorbate.epsilon_kelvin  = " << g.adsorbate.epsilonKelvin << "\n"
               << "gcmc.adsorbate.sigma_angstrom  = " << g.adsorbate.sigmaAngstrom << "\n"
               << "gcmc.adsorbate.mass_amu        = " << g.adsorbate.massAmu << "\n"
@@ -420,7 +474,8 @@ constexpr double kAvogadro = 6.02214076e23;
 /// asks for: "a published result can be reproduced from its artifacts
 /// alone." Only called for a real run -- see printUsage()/runGcmcCommand's
 /// doc comments for why --dry-run doesn't write anything.
-void writeResolvedConfig(const aleator::io::GcmcRunConfig& cfg, const std::array<int, 3>& supercell) {
+void writeResolvedConfig(const aleator::io::GcmcRunConfig& cfg, const std::array<int, 3>& supercell,
+                          const std::optional<bool>& energyGridCacheHit) {
     std::filesystem::create_directories(cfg.run.outputDirectory);
     const auto path = cfg.run.outputDirectory / "resolved_config.json";
     std::ofstream out(path);
@@ -429,7 +484,7 @@ void writeResolvedConfig(const aleator::io::GcmcRunConfig& cfg, const std::array
                                   "= " +
                                   cfg.run.outputDirectory.string() + ")");
     }
-    out << resolvedConfigJson(cfg, supercell);
+    out << resolvedConfigJson(cfg, supercell, energyGridCacheHit);
     spdlog::info("wrote resolved configuration (incl. run.rng_seed={}) to {}", cfg.run.rngSeed,
                  path.string());
 }
@@ -439,7 +494,8 @@ int runGcmcCommand(const std::filesystem::path& configPath, bool dryRun, bool js
 
     if (dryRun) {
         const PreparedGcmc prepared = prepareGcmc(cfg); // validates the CIF and species coverage too
-        printGcmcConfig(cfg, prepared.supercell, json);
+        const auto cacheHit = frameworkEnergyGridCacheHitForDryRun(cfg.gcmc, prepared);
+        printGcmcConfig(cfg, prepared.supercell, cacheHit, json);
         return kExitSuccess;
     }
 
@@ -458,7 +514,12 @@ int runGcmcCommand(const std::filesystem::path& configPath, bool dryRun, bool js
                      cfg.gcmc.pressureBar, prepared.fugacityPascal);
     }
 
-    const auto frameworkEnergyGrid = buildFrameworkEnergyGridIfConfigured(cfg.gcmc, prepared);
+    bool energyGridCacheHit = false;
+    const auto frameworkEnergyGrid =
+        buildFrameworkEnergyGridIfConfigured(cfg.gcmc, prepared, &energyGridCacheHit);
+    const std::optional<bool> energyGridCacheStatus =
+        cfg.gcmc.energyGridSpacingAngstrom.has_value() ? std::optional<bool>(energyGridCacheHit)
+                                                        : std::nullopt;
 
     // Computed before particles_ is moved into the engine below.
     double frameworkMassAmu = 0.0;
@@ -468,7 +529,7 @@ int runGcmcCommand(const std::filesystem::path& configPath, bool dryRun, bool js
     const double frameworkMassKg = frameworkMassAmu * kAmuToKg;
     const double volume = std::abs(prepared.structure.lattice.volume());
 
-    writeResolvedConfig(cfg, prepared.supercell);
+    writeResolvedConfig(cfg, prepared.supercell, energyGridCacheStatus);
 
     auto rng = std::make_unique<aleator::core::Philox4x32Rng>();
     rng->seed(cfg.run.rngSeed, /*streamIndex=*/0);

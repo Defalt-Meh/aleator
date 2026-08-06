@@ -11,6 +11,8 @@ namespace aleator::forcefield {
 struct LennardJonesParameters {
     double epsilon = 0.0;
     double sigma = 0.0;
+
+    [[nodiscard]] bool operator==(const LennardJonesParameters&) const = default;
 };
 
 /// How the potential is modified at/beyond the cutoff radius `rc`.

@@ -98,6 +98,19 @@ struct GcmcConfig {
     /// what their run computes).
     std::optional<double> energyGridSpacingAngstrom;
 
+    /// Directory FrameworkEnergyGrid cache files live in (see
+    /// engines/monte_carlo/framework_energy_grid.hpp's
+    /// loadOrBuildFrameworkEnergyGrid) -- only meaningful if
+    /// energyGridSpacingAngstrom is set. Resolved relative to the config
+    /// file's own directory (same convention as framework_cif/
+    /// output_directory), default "energy_grid_cache" -- deliberately NOT
+    /// inside run.output_directory by default, since a grid's whole point
+    /// is amortization across pressure points/repeat runs/subsequent jobs
+    /// (CLAUDE.md section 5 milestone), which usually means separate
+    /// per-run output directories but a config file (or sibling configs)
+    /// sharing the same framework.
+    std::filesystem::path energyGridCacheDirectory = "energy_grid_cache";
+
     /// Optional override of the automatically-computed minimum supercell
     /// replication (core::minimumSupercellReplication, applied in
     /// src/cli/main.cc's prepareGcmc() once the framework CIF's real

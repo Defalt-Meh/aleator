@@ -2,6 +2,8 @@ add_executable(aleator_bench
     bench_neighbor_list.cc
     bench_vector_sum.cc
     bench_gcmc_ch4_irmof1.cc
+    bench_gcmc_co2_irmof1.cc
+    bench_framework_energy_grid_gcmc.cc
 )
 aleator_configure_target(aleator_bench)
 
@@ -13,6 +15,18 @@ target_link_libraries(aleator_bench
         aleator::core::neighbor
         aleator::engines::monte_carlo
         aleator::forcefield::pairwise
+        aleator::forcefield::electrostatics
+        aleator::io
+)
+
+# bench_gcmc_co2_irmof1.cc and bench_framework_energy_grid_gcmc.cc read the real validation
+# datasets rather than synthesizing a framework (see those files' header comments for why real
+# geometry/occupancy matters) -- point at the same data/ directories the validation suite
+# already uses, so there is exactly one copy of each dataset in the repository.
+target_compile_definitions(aleator_bench
+    PRIVATE
+        ALEATOR_CO2_IRMOF1_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/validation/data/co2_irmof1"
+        ALEATOR_IRMOF1_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/validation/data/irmof1"
 )
 
 # ALEATOR_BENCH_NATIVE scopes -march=native to this executable only (set by

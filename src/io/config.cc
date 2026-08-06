@@ -197,6 +197,10 @@ GcmcRunConfig loadGcmcConfig(const std::filesystem::path& file) {
         requirePositive(*cfg.energyGridSpacingAngstrom, filePath,
                          "gcmc.energy_grid_spacing_angstrom", gcmc, "energy_grid_spacing_angstrom");
     }
+    cfg.energyGridCacheDirectory = resolveRelativeTo(
+        file, optionalValue<std::string>(gcmc, "energy_grid_cache_directory",
+                                          cfg.energyGridCacheDirectory.string(), filePath,
+                                          "gcmc.energy_grid_cache_directory", "a string"));
 
     // Supercell replication override (CLAUDE.md milestone: "automatic
     // supercell replication... a config key to override the computed

@@ -18,6 +18,7 @@ add_executable(aleator_validation_tests
     test_lennard_jones_forces_fd.cc
     test_lennard_jones_nist.cc
     test_lennard_jones_tail_correction.cc
+    test_framework_energy_grid_cache.cc
     test_neighbor_list_brute_force.cc
     test_pore_geometry.cc
     test_supercell_energy_invariance.cc
