@@ -97,4 +97,73 @@ comments for the full writeup):
   blocking changes sampling efficiency, not the equilibrium loading, so it
   cannot explain a systematic several-percent shortfall.
 
+## Investigation performed this session (supercell replication milestone)
+
+The prior session left a real cutoff/supercell test genuinely un-attempted
+("prohibitively slow" for the O(N) guest-host scan at the time). This
+session's own milestone (automatic supercell replication,
+`core::minimumSupercellReplication`/`core::replicateSupercell`, see CLAUDE.md
+section 0) made it possible for the first time and it was actually run, on
+a Release build against real IRMOF-1 and this exact test's own 0.1 bar
+point (same seed=2026, same 30,000+90,000 step protocol).
+
+**Accumulated shifted-potential offset, computed directly.** The standing
+hypothesis was: a 13% near-constant ratio across two decades of pressure
+looks like an energy-scale offset of ~36 K per molecule
+(`ln(1.13)*298 K`), the size of an accumulated `-V_LJ(r_c)` (shifted-LJ
+truncation constant) term. Computed directly rather than estimated: the
+real CH4-framework LJ energy was minimized over the real IRMOF-1 unit cell
+(30^3 coarse grid + local refinement) to find the actual lowest-energy
+adsorption site (E = -1696.3 K at fractional (0.150, 0.153, 0.850)), then
+`sum(-V_LJ(cutoff=12.0))` was computed over every one of the 176 framework
+atoms within that cutoff of the site. Result: **31.33 K — 86% of the
+predicted 36.42 K.** Checked for robustness, not taken from one lucky
+point: the same site (by IRMOF-1's own `Fm-3m` symmetry, 192 operations)
+recurs at 8 independent locations found via the same search, all giving
+the identical 31.33 K. This is real, substantial, quantitative support for
+the hypothesis — not proof it's the *entire* gap, but strong evidence it's
+a major, real contributor.
+
+**Direct test: does a larger cutoff (now expressible via a 2x2x2
+supercell) move the computed loading?** Yes, substantially, but *not* by
+simple monotonic convergence onto the pyIAST value:
+
+| cutoff (Ang) | cell | `<N>` | loading (mmol/g) | gap to pyIAST |
+|---|---|---|---|---|
+| 12.0 | 1x1x1 (424 atoms) | 0.2315 +/- 0.0036 | 0.03758 +/- 0.00058 | 12.63% |
+| 16.0 | 2x2x2 (3392 atoms) | 2.1448 +/- 0.0437 | 0.04353 +/- 0.00089 | **1.21%** |
+| 20.0 | 2x2x2 (3392 atoms) | 2.2508 +/- 0.0384 | 0.04568 +/- 0.00078 | 6.21% |
+
+Loading increases monotonically with cutoff (0.0376 -> 0.0435 -> 0.0457) —
+a real, substantial, cutoff-driven effect, exactly the direction and
+rough scale the accumulated-shift hypothesis predicts (removing more of
+the artificial positive shift as the cutoff grows makes binding more
+favorable, raising loading). But it does not plateau at the pyIAST value:
+it passes *through* it near cutoff=16 (gap statistically close to zero:
+1.21% is about 0.7 standard errors) and continues rising past it at
+cutoff=20 (gap grows again, ~3.6 standard errors — a real, not
+noise-level, move in the "wrong" direction relative to pyIAST). The
+cutoff=16-vs-20 difference (0.00215 mmol/g) is ~2.4x the larger of the two
+points' standard errors, so this is a real trend, not two noisy draws.
+
+**Honest verdict (CLAUDE.md section 4: "if it survives, it stays owned"):**
+cutoff truncation is now demonstrated, not just hypothesized, to be a real
+and substantial contributor to this system's computed loading (a ~20%
+swing in loading between cutoff=12 and cutoff=20) — this genuinely
+explains a large fraction of why the single-cell, cutoff=12 result sits
+low. But "increase the cutoff" does not cleanly converge onto pyIAST's
+number; the computed curve passes near it and continues moving away,
+meaning either (a) this codebase's true infinite-cutoff-limit loading is
+close to but not identical to pyIAST's value at this alpha/force-field
+combination, or (b) pyIAST's own (undocumented, per above) simulation
+setup used a cutoff/supercell in the vicinity of what produced the
+cutoff=16 near-match, which would be coincidence-shaped rather than
+demonstrated. Only one pressure point (0.1 bar) and three cutoffs were
+tested this session (time-scoped, not exhaustive) — the full four-point
+curve at a larger cutoff, and denser cutoff sampling to characterize the
+true asymptote, remain open follow-up work. **This defect is NOT closed.**
+It is better characterized, with two new, real, quantitative findings
+(both supporting a major real contribution from cutoff truncation) added
+to the record, not swept away.
+
 **Status: open, unresolved, owned.** Not closed by widening any tolerance.

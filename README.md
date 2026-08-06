@@ -33,7 +33,7 @@ plausible-looking guess.
 | `io` | CIF reader with full space-group symmetry expansion from the asymmetric unit | Real structures from the IZA zeolite database (LTA — cubic, 48 symmetry operations; PTY — triclinic P-1), plus malformed-input error handling |
 | `forcefield/pairwise` | Lennard-Jones energy, forces, and virial — truncated / shifted / linear-force-shifted, with analytic long-range tail corrections and Lorentz-Berthelot or geometric mixing rules | Real NIST Standard Reference Simulation Website (SRSW) reference configurations and energies; analytic forces vs. central finite difference |
 | `forcefield/electrostatics` | Standard Ewald summation: real-space, reciprocal-space, self-energy, intramolecular exclusion correction, tinfoil boundary conditions | NaCl rock-salt Madelung constant (1.747564594633…, matched to 1.5×10⁻⁸ relative — required 10⁻⁶); NIST SRSW SPC/E water reference energies, term by term; invariance under the Ewald splitting parameter; forces vs. finite difference |
-| `engines/monte_carlo` | Grand-canonical Monte Carlo: insertion, deletion, translation, and rotation moves for rigid (single- or multi-site) adsorbate molecules, with a Peng-Robinson equation of state supplying the fugacity in the chemical-potential term. Supports charged adsorbates/frameworks via an incrementally-maintained Ewald reciprocal-space cache (`EwaldIncrementalState`) — see below. | *Validated*: detailed balance verified as a runtime-checked algebraic identity for every move type; Widom test-particle-insertion Henry coefficient matches this engine's own low-pressure isotherm slope to 0.006% on a synthetic system (required 2%), and separately matches this engine's own real IRMOF-1/methane low-pressure loading to within its tight tolerance. *Validated with known deviation*: the full four-point methane/IRMOF-1 isotherm sits systematically 12–15% below the published pyIAST reference curve — see below. *Validated with known deviation (charged)*: real CO2/IRMOF-1 loading (Ewald electrostatics, real DDEC framework charges) matches a published reference to well under 1σ at low/mid pressure; the high-pressure point deviates by ~2.2σ (~19.5%) — see below. |
+| `engines/monte_carlo` | Grand-canonical Monte Carlo: insertion, deletion, translation, and rotation moves for rigid (single- or multi-site) adsorbate molecules, with a Peng-Robinson equation of state supplying the fugacity in the chemical-potential term. Supports charged adsorbates/frameworks via an incrementally-maintained Ewald reciprocal-space cache (`EwaldIncrementalState`) — see below. Automatic supercell replication (see below) lets a run express a cutoff larger than a framework's own single cell supports. | *Validated*: detailed balance verified as a runtime-checked algebraic identity for every move type; Widom test-particle-insertion Henry coefficient matches this engine's own low-pressure isotherm slope to 0.006% on a synthetic system (required 2%), and separately matches this engine's own real IRMOF-1/methane low-pressure loading to within its tight tolerance. Energy per unit cell invariant under supercell replication to 1e-10 relative (LJ and Ewald reciprocal, both measured directly). *Validated with known deviation*: the full four-point methane/IRMOF-1 isotherm sits systematically 12–15% below the published pyIAST reference curve at a single-cell cutoff of 12 Å; cutoff truncation is now demonstrated (not just hypothesized) to be a real, substantial contributor (loading swings ~20% between cutoff 12–20 Å) without cleanly resolving the full gap — see below. *Validated with known deviation (charged)*: real CO2/IRMOF-1 loading (Ewald electrostatics, real DDEC framework charges) matches a published reference to well under 1σ at low/mid pressure; the high-pressure point deviates by ~2.2σ (~19.5%) — see below. |
 | `engines/geometry_analysis` | Porous-material geometry: largest cavity diameter (LCD), pore limiting diameter (PLD), N₂-probe accessible surface area (ASA) and accessible volume (AV), from a periodic radical (power/Laguerre) Voronoi decomposition of the framework via Voro++, probe-radius parameterized, triclinic cells first-class. | *Validated*: PLD and ASA/AV match real Zeo++ 0.4.7 output on real IZA zeolite structures (LTA, MFI, FAU) — PLD to ≤4×10⁻⁴ Å, ASA/AV within 10%; `Lattice::minimumImageDisplacement` cross-checked against a 200,000-trial brute-force periodic-image search on a genuinely triclinic structure (PTY); FAU's real published inaccessible sodalite-cage pockets correctly come out as a nonzero, minority fraction of the void space. *Validated with known deviation*: LCD sits systematically 0.4–3.6% below Zeo++ on every structure tested (power-vs-Apollonius diagram, a real algorithmic approximation shared with Zeo++'s own tessellation library); PTY's PLD/ASA/AV additionally sit 1.8%/12%/8.8% off Zeo++, traced to a specific percolation-critical Voronoi edge, not left unexplained — see below. |
 
 The IRMOF-1/methane comparison against the published pyIAST reference isotherm is the
@@ -58,10 +58,53 @@ inaccessible-pore blocking was ruled out by reading this codebase's own insertio
 (uniform sampling over the full cell, no accessibility filtering, so blocking can only
 affect sampling efficiency, not the equilibrium loading); and a real sensitivity check
 (cutoff 12.0 vs. 12.8 Å at constant cell size) moved the computed loading by only 0.25
-standard errors, ruling out the within-cell portion of the cutoff-margin hypothesis. A
-larger cutoff enabled by a bigger simulation cell, and pyIAST's own (publicly
-undocumented) simulation parameters, remain open and unverified. Full writeup:
+standard errors, ruling out the within-cell portion of the cutoff-margin hypothesis.
+
+A later session made the larger-cutoff test possible (automatic supercell replication —
+see below) and actually ran it, plus computed the standing "~36 K accumulated
+shifted-potential offset" hypothesis directly rather than leaving it estimated: at the
+real CH4-framework LJ energy minimum in IRMOF-1 (found via search), the accumulated
+`-V_LJ(cutoff)` sum over every nearby framework atom is 31.33 K — 86% of the predicted
+36.42 K, robust across 8 symmetry-independent recurrences of that site. Directly testing
+whether a larger cutoff (2x2x2 supercell) closes the gap: loading rises monotonically and
+substantially with cutoff (0.0376 → 0.0435 → 0.0457 mmol/g at cutoff 12/16/20 Å, a real
+~20% swing, far outside Monte Carlo noise) but does **not** converge onto the pyIAST
+value — the gap shrinks to 1.21% near cutoff=16 then grows again to 6.21% at cutoff=20,
+passing *through* the reference rather than settling on it. Verdict: cutoff truncation is
+now demonstrated, not just hypothesized, to be a real and substantial contributor — but
+it does not cleanly resolve the full gap on its own. **Still open, better characterized,
+not closed.** pyIAST's own (publicly undocumented) simulation parameters remain
+unverified regardless. Full writeup:
 `tests/validation/data/irmof1/known_deviation_baseline.md`.
+
+### Supercell replication
+
+Real screening workloads routinely need a cutoff larger than a framework's own single
+unit cell supports under minimum image — CoRE MOF cells are commonly 10–20 Å, well under
+`2×cutoff` for a typical 12+ Å cutoff. `core::minimumSupercellReplication(lattice,
+cutoff)` computes the minimum `(nx, ny, nz)` replication needed, per axis, via
+`Lattice::perpendicularWidth` — not raw lattice vector length, which differs from
+perpendicular width on a triclinic cell and would silently be wrong (CLAUDE.md invariant
+6). `core::replicateSupercell` performs the replication as an exact integer
+lattice-vector translation of every atom (not a fractional round-trip); `(1,1,1)` is a
+proven bit-identical no-op. `gcmc run` computes this automatically from
+`gcmc.cutoff_angstrom`; the optional `gcmc.supercell = [nx, ny, nz]` config key can only
+override it *upward* — a request below the computed minimum is rejected at validation
+time, naming the computed minimum, once the framework's real lattice is known (CLAUDE.md
+invariant 11). `--dry-run` and the real-run `resolved_config.json` artifact both report
+the chosen replication.
+
+Energy per unit cell is invariant under replication to 1e-10 relative — validated as an
+*exact* property (replicating a rigid framework is exact, not a Monte-Carlo-noise
+question), separately for LJ (real IRMOF-1, static, 2x2x2: measured 1.3e-13) and for
+Ewald's reciprocal sum (real NaCl rocksalt, 2x2x2). The reciprocal sum needed its own
+dedicated test rather than being assumed to inherit LJ's invariance: its k-vector set is
+defined by the reciprocal lattice, which scales *inversely* with real-space replication,
+so `Ewald`'s `kMax` (its reciprocal-lattice index cutoff) must be scaled by the same
+integer replication factor to keep the physical k-space truncation region equivalent.
+Measured both ways to confirm this was necessary: with `kMax` correctly scaled (12→24 for
+a 2x2x2 replication), reciprocal energy per formula unit was bit-identical (0.0 relative
+error); left unscaled, a real 3.46e-5 relative error appeared.
 
 ### Charged adsorbates: incremental Ewald for GCMC
 
@@ -430,7 +473,10 @@ Every physical quantity in the schema carries its unit in the key name
 `gcmc.energy_grid_spacing_angstrom` key (CLAUDE.md section 5's `FrameworkEnergyGrid`) is
 unset by default, meaning "direct O(N) guest-host scan," not an implicit spacing —
 setting it is a real accuracy/speed tradeoff, not free, so it's opt-in (see that
-section's README writeup for the measured cost).
+section's README writeup for the measured cost). The optional `gcmc.supercell = [nx, ny,
+nz]` key overrides the automatically-computed minimum supercell replication (see
+"Supercell replication" above) — upward only; a value below the computed minimum is a
+config error, not a silent clamp.
 
 `examples/` contains real, runnable configs. `examples/gcmc_ch4_irmof1.toml` is not a
 shortened smoke test: it uses the exact same seed, pressure, and step counts as
