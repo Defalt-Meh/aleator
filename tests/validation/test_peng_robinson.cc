@@ -31,6 +31,8 @@
 
 using aleator::engines::kMethane;
 using aleator::engines::PengRobinson;
+using aleator::engines::PengRobinsonMixture;
+using aleator::engines::PengRobinsonSubstance;
 
 TEST_CASE("PengRobinson fugacity coefficient -> 1 in the ideal-gas (P -> 0) limit",
           "[validation][montecarlo]") {
@@ -127,4 +129,82 @@ TEST_CASE("PengRobinson fugacity coefficient deviates from 1 at elevated pressur
     REQUIRE(phiLow < 1.0);
     REQUIRE(phiLow > 0.99);   // near-ideal at 1 bar
     REQUIRE(phiHigh < phiLow); // deviation from ideality grows with pressure
+}
+
+// Mixture-GCMC milestone: PengRobinsonMixture validation. Same "internally
+// consistent with the EOS it claims to solve" philosophy as the pure-
+// substance tests above, extended with the one check that's specific to a
+// MIXTURE implementation and catches the exact class of bug the milestone
+// itself warns about ("this is where the classic errors live, and a wrong
+// prefactor gives smooth, plausible, wrong selectivities"): a "mixture" of
+// two PHYSICALLY IDENTICAL components (same Tc/Pc/omega) must be
+// indistinguishable from the pure substance, split by mole fraction --
+// van der Waals one-fluid mixing rules degenerate exactly to the pure EOS
+// when every component is identical (a_ij = a_i for all i,j since a_i=a_j
+// and k_ij=0, so a_mix = a_i * (sum_i x_i)^2 = a_i; b_mix = b_i * sum_i x_i
+// = b_i -- both exactly the pure values, independent of how mole fraction is
+// split), so this is an exact, not approximate, identity.
+TEST_CASE("PengRobinsonMixture of two identical substances reproduces the pure-substance EOS "
+          "exactly",
+          "[validation][montecarlo][mixture]") {
+    const PengRobinson pureEos(kMethane);
+    const PengRobinsonMixture mixtureEos(std::vector<PengRobinsonSubstance>{kMethane, kMethane});
+
+    const std::vector<std::pair<double, double>> conditions{
+        {298.15, 1.0e5}, {298.15, 1.0e6}, {298.15, 1.0e7}, {350.0, 5.0e6},
+    };
+    const std::vector<std::vector<double>> moleFractionSplits{
+        {0.5, 0.5}, {0.1, 0.9}, {0.999, 0.001},
+    };
+
+    for (const auto& [t, p] : conditions) {
+        const double zPure = pureEos.compressibilityFactor(t, p);
+        const double fPure = pureEos.fugacityPascal(t, p);
+        for (const auto& x : moleFractionSplits) {
+            const double zMix = mixtureEos.compressibilityFactor(t, p, x);
+            INFO("T=" << t << " P=" << p << " x0=" << x[0] << " zPure=" << zPure
+                       << " zMix=" << zMix);
+            REQUIRE(std::abs(zMix - zPure) < 1e-10 * zPure);
+
+            const auto fugacities = mixtureEos.fugacitiesPascal(t, p, x);
+            REQUIRE(fugacities.size() == 2);
+            // Each component's partial fugacity in this degenerate mixture
+            // must equal its mole fraction times the pure-substance
+            // fugacity at the same T, P -- the Lewis-Randall ideal-mixing
+            // result, which is exact (not approximate) here specifically
+            // because the two components are physically identical.
+            for (std::size_t i = 0; i < 2; ++i) {
+                const double expected = x[i] * fPure;
+                INFO("component " << i << " x=" << x[i] << " fugacity=" << fugacities[i]
+                                   << " expected=" << expected);
+                REQUIRE(std::abs(fugacities[i] - expected) < 1e-8 * std::max(expected, 1.0));
+            }
+        }
+    }
+}
+
+TEST_CASE("PengRobinsonMixture: fugacity coefficients -> 1 in the ideal-gas (P -> 0) limit "
+          "for a real two-component mixture",
+          "[validation][montecarlo][mixture]") {
+    // CO2 and N2 (CODATA/NIST-consistent critical properties, cross-checked
+    // against Peng & Robinson's own original parameterization): a real,
+    // non-degenerate mixture (unlike the identical-substances test above),
+    // checked against the one thing that must hold regardless of how
+    // different the two components are -- at vanishing pressure, every
+    // component's fugacity coefficient goes to 1 (fugacity -> partial
+    // pressure), the same ideal-gas limit the pure-substance test checks.
+    constexpr PengRobinsonSubstance kCarbonDioxide{304.13, 7.3773e6, 0.22394};
+    constexpr PengRobinsonSubstance kNitrogen{126.19, 3.3958e6, 0.0372};
+    const PengRobinsonMixture mixtureEos(
+        std::vector<PengRobinsonSubstance>{kCarbonDioxide, kNitrogen});
+
+    const std::vector<double> x{0.3, 0.7};
+    const double totalPressurePascal = 1.0; // ~vacuum
+    const auto fugacities = mixtureEos.fugacitiesPascal(298.15, totalPressurePascal, x);
+    for (std::size_t i = 0; i < 2; ++i) {
+        const double partialPressure = x[i] * totalPressurePascal;
+        const double phi = fugacities[i] / partialPressure;
+        INFO("component " << i << " phi=" << phi);
+        REQUIRE(std::abs(phi - 1.0) < 1e-6);
+    }
 }

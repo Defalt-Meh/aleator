@@ -7,8 +7,10 @@ add_executable(aleator_validation_tests
     test_ewald_spce_water.cc
     test_gcmc_cell_list_bit_identical.cc
     test_gcmc_charged_detailed_balance.cc
+    test_gcmc_charged_mixture_drift.cc
     test_gcmc_co2_irmof1_isotherm.cc
     test_gcmc_detailed_balance.cc
+    test_gcmc_mixture_degenerate.cc
     test_gcmc_ch4_irmof1_isotherm.cc
     test_gcmc_widom_henry.cc
     test_framework_energy_grid.cc

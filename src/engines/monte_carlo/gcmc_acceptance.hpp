@@ -50,6 +50,50 @@ namespace aleator::engines::gcmc {
     return std::exp(-deltaUKelvin / temperatureKelvin);
 }
 
+/// Unclamped ratio for an identity-swap move: converting one existing
+/// molecule of species A (countABefore molecules of A present before the
+/// move) into a molecule of species B (countBBefore molecules of B present
+/// before the move), in place.
+///
+/// Derivation (this is "where the classic errors live" per the mixture
+/// milestone that added this function — worth writing out in full rather
+/// than asserting the result). The multi-species grand-canonical weight is
+///   pi(N_A, N_B, ...) ~ prod_i [z_i^{N_i} V^{N_i} / (N_i! Lambda_i^{3N_i})] * exp(-beta*U)
+/// with each species' activity z_i = beta * Lambda_i^3 * f_i (see
+/// insertionRatio's doc comment for why Lambda_i cancels completely within
+/// species i's own factor: z_i's Lambda_i^3 exactly cancels the
+/// Lambda_i^{-3N_i} in that species' own normalization, regardless of what
+/// any OTHER species is doing — there is no cross term between species in an
+/// ideal, non-interacting reservoir). For the transition (N_A, N_B) ->
+/// (N_A-1, N_B+1):
+///   pi(N_A-1,N_B+1) / pi(N_A,N_B)
+///     = (z_B/z_A) * (N_A! / (N_A-1)!) * (N_B! / (N_B+1)!)
+///     = (z_B/z_A) * N_A / (N_B+1)
+/// and z_B/z_A = f_B/f_A exactly (each species' own Lambda_i cancels within
+/// its own z_i, per above — there is no leftover (Lambda_A/Lambda_B)^3 mass
+/// factor, even though A and B are physically different molecules with
+/// different masses and therefore different Lambda). So:
+///   R_swap(A->B) = (f_B/f_A) * (countABefore / (countBBefore+1)) * exp(-deltaU/T)
+/// with NO volume or temperature prefactor beyond what's inside deltaU's
+/// exp() — V/T cancel exactly, confirmed independently by composing this as
+/// "delete A then insert B at the same position": deletionRatio(fA, V,
+/// countABefore, T, dU_A) * insertionRatio(fB, V, countBBefore, T, dU_B) =
+/// [countABefore/(fA*V/T)] * [(fB*V/T)/(countBBefore+1)] =
+/// (fB*countABefore)/(fA*(countBBefore+1)), the V/T cancelling identically —
+/// the same answer by a second, independent route.
+///
+/// Reciprocal-identity check (tests/validation/test_gcmc_detailed_balance.cc):
+/// swapRatio(fA,fB,countABefore,countBBefore,T,dU) *
+/// swapRatio(fB,fA,countBBefore+1,countABefore-1,T,-dU) == 1 exactly, on the
+/// reverse transition (N_A-1,N_B+1) -> (N_A,N_B).
+[[nodiscard]] inline double swapRatio(double fugacityInternalFrom, double fugacityInternalTo,
+                                       std::size_t countFromBefore, std::size_t countToBefore,
+                                       double temperatureKelvin, double deltaUKelvin) {
+    return (fugacityInternalTo / fugacityInternalFrom) *
+           (static_cast<double>(countFromBefore) / static_cast<double>(countToBefore + 1)) *
+           std::exp(-deltaUKelvin / temperatureKelvin);
+}
+
 /// min(1, ratio) — the acceptance PROBABILITY actually used by the engine;
 /// the *Ratio functions above return the unclamped value because the
 /// detailed-balance identity (product of forward/reverse ratios == 1) only

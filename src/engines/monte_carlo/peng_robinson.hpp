@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 namespace aleator::engines {
 
 /// Pure-substance critical properties needed by the Peng-Robinson EOS.
@@ -85,6 +87,71 @@ private:
     double a_;
     double b_;
     double kappa_;
+};
+
+/// Peng-Robinson (1976) cubic EOS for a MIXTURE of substances, via the
+/// standard van der Waals one-fluid mixing rules (Peng & Robinson's own
+/// paper already extends the pure-substance EOS this way; the specific
+/// closed-form per-component fugacity-coefficient expression used below
+/// follows the presentation in Reid/Prausnitz/Poling, "The Properties of
+/// Gases and Liquids," and is standard across the mixture-GCMC/screening
+/// literature, not derived from scratch here):
+///
+///   a_ij(T) = sqrt(a_i(T) * a_j(T)) * (1 - k_ij)     [a_i(T) = a_i * alpha_i(T),
+///                                                      the pure component's own
+///                                                      temperature-dependent PR "a"]
+///   a_mix(T) = sum_i sum_j x_i x_j a_ij(T)
+///   b_mix = sum_i x_i b_i
+///
+/// with k_ij the (symmetric, zero-diagonal) binary interaction parameter
+/// between components i and j. THIS CLASS DEFAULTS k_ij = 0 for every pair
+/// UNLESS EXPLICITLY GIVEN -- an honest, documented simplification (no
+/// regressed binary interaction data is bundled with this codebase), not a
+/// silent assumption: k_ij = 0 is itself a real, named approximation
+/// (equivalent to assuming the unlike-pair interaction is exactly the
+/// geometric mean of the like-pair interactions), and callers with real
+/// k_ij data for their system should supply it via the constructor.
+///
+/// Per-component fugacity coefficient in the mixture, at the mixture's own
+/// Z (found from A_mix/B_mix via the identical cubic PengRobinson::
+/// compressibilityFactor solves for a pure substance):
+///   ln(phi_i) = (b_i/b_mix)*(Z-1) - ln(Z-B_mix)
+///     - (A_mix/(2*sqrt2*B_mix)) * [(2/a_mix)*sum_j(x_j*a_ij) - b_i/b_mix]
+///       * ln[(Z+(1+sqrt2)*B_mix)/(Z+(1-sqrt2)*B_mix)]
+/// and f_i = x_i * phi_i * P (the component's fugacity AT its mole fraction
+/// in the mixture, i.e. its partial fugacity -- this is what
+/// MonteCarloEngine's per-species GCMC insertion/deletion/swap acceptance
+/// (engines/monte_carlo/gcmc_acceptance.hpp) needs for species i, not the
+/// pure-component fugacity PengRobinson::fugacityPascal would give at the
+/// same total pressure).
+class PengRobinsonMixture {
+public:
+    /// `binaryInteractionKij`, if given, must be substances.size() x
+    /// substances.size(), symmetric, zero diagonal -- checked at
+    /// construction. Empty (the default) means every k_ij = 0 (see class
+    /// doc comment).
+    explicit PengRobinsonMixture(std::vector<PengRobinsonSubstance> substances,
+                                  std::vector<std::vector<double>> binaryInteractionKij = {});
+
+    /// Mixture compressibility factor Z at the given T, total P, and mole
+    /// fractions (must sum to 1, checked). Vapor/gas-phase root only, same
+    /// caveats as PengRobinson::compressibilityFactor.
+    [[nodiscard]] double compressibilityFactor(double temperatureKelvin,
+                                                double totalPressurePascal,
+                                                const std::vector<double>& moleFractions) const;
+
+    /// Per-component fugacity (Pa), f_i = x_i * phi_i * P, at the given T,
+    /// total P, and mole fractions.
+    [[nodiscard]] std::vector<double> fugacitiesPascal(
+        double temperatureKelvin, double totalPressurePascal,
+        const std::vector<double>& moleFractions) const;
+
+private:
+    std::vector<PengRobinsonSubstance> substances_;
+    std::vector<double> a_;     // per-component pure PR "a" (same formula as PengRobinson)
+    std::vector<double> b_;     // per-component pure PR "b"
+    std::vector<double> kappa_; // per-component PR kappa
+    std::vector<std::vector<double>> kij_;
 };
 
 } // namespace aleator::engines

@@ -111,3 +111,60 @@ TEST_CASE("Rotation acceptance ratio is self-reciprocal (detailed balance)",
         REQUIRE(std::abs(rForward * rReverse - 1.0) < 1e-12);
     }
 }
+
+TEST_CASE("Identity-swap acceptance ratio is an exact reciprocal on the reverse transition "
+          "(detailed balance)",
+          "[validation][montecarlo][mixture]") {
+    // Mixture GCMC milestone: swapRatio's own doc comment (gcmc_acceptance.hpp)
+    // derives R_swap(A->B) = (fB/fA) * (countABefore/(countBBefore+1)) *
+    // exp(-dU/T), with NO leftover mass/thermal-wavelength factor between
+    // species of different mass -- this is exactly the kind of prefactor
+    // error the milestone warns "gives smooth, plausible, wrong
+    // selectivities," so it is checked here as a hard numerical identity,
+    // not trusted from the derivation alone. Species A and B get
+    // INDEPENDENTLY sampled fugacities (deliberately, not the same value)
+    // so a bug that accidentally cancelled fB/fA to 1 (e.g. reusing fA on
+    // both sides) would be caught.
+    std::mt19937 rng(20261);
+    std::uniform_real_distribution<double> fugacityDist(1e-3, 1e3);
+    std::uniform_real_distribution<double> temperatureDist(50.0, 800.0);
+    std::uniform_real_distribution<double> deltaUDist(-500.0, 500.0);
+    std::uniform_int_distribution<std::size_t> countDist(0, 200);
+
+    for (int trial = 0; trial < 10000; ++trial) {
+        const double fugacityA = fugacityDist(rng);
+        const double fugacityB = fugacityDist(rng);
+        const double temperature = temperatureDist(rng);
+        const double deltaUForward = deltaUDist(rng); // U(after A->B) - U(before)
+        const std::size_t countABefore = countDist(rng);
+        const std::size_t countBBefore = countDist(rng);
+
+        // Forward: (countABefore, countBBefore) -> (countABefore-1, countBBefore+1).
+        const double rForward = swapRatio(fugacityA, fugacityB, countABefore, countBBefore,
+                                           temperature, deltaUForward);
+        // Reverse: on that resulting state, B->A. Its "from" count is the
+        // post-forward B count (countBBefore+1); its "to" count is the
+        // post-forward A count (countABefore-1, well-defined since
+        // countABefore>=1 whenever the forward ratio is ever actually used
+        // -- see MonteCarloEngine::attemptSwap, which never proposes a swap
+        // FROM a species with zero molecules present).
+        if (countABefore == 0) {
+            continue; // forward move is never actually proposable from this state; skip
+        }
+        const double rReverse = swapRatio(fugacityB, fugacityA, countBBefore + 1, countABefore - 1,
+                                           temperature, -deltaUForward);
+
+        const double product = rForward * rReverse;
+        INFO("fA=" << fugacityA << " fB=" << fugacityB << " T=" << temperature
+                    << " countABefore=" << countABefore << " countBBefore=" << countBBefore
+                    << " deltaU=" << deltaUForward << " rForward=" << rForward
+                    << " rReverse=" << rReverse);
+        REQUIRE(std::abs(product - 1.0) < 1e-9);
+
+        const double piBefore = 1.0;
+        const double piAfter = piBefore * rForward;
+        const double lhs = piBefore * clampToProbability(rForward);
+        const double rhs = piAfter * clampToProbability(rReverse);
+        REQUIRE(std::abs(lhs - rhs) < 1e-9 * std::max(std::abs(lhs), std::abs(rhs)) + 1e-15);
+    }
+}
