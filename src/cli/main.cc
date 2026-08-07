@@ -4,15 +4,11 @@
 //
 // CLAUDE.md milestone: "the CLI is the differentiator... expose ONLY
 // subcommands backed by working engines." `gcmc run`, `pore analyze`,
-// `validate`, and `bench` exist as executable subcommands — `md run` does
-// not, because engines/dynamics is NotImplemented, and a subcommand that
-// prints NotImplemented when run advertises capability this build doesn't
-// have (worse than omitting it). The `[md]` config *schema* still exists
-// (io/config.hpp) and `aleator validate` still recognizes it — schema
-// validation is real and honest regardless of whether an engine exists yet
-// — but it says plainly that the engine isn't implemented rather than
-// silently calling the config "valid" in a way that could be mistaken for
-// "runnable".
+// `validate`, and `bench` exist as executable subcommands. Molecular
+// dynamics has been cancelled as a project goal outright (not deferred —
+// see CLAUDE.md section 0), so there is no `[md]` config schema, no `md`
+// dispatch, and no engines/dynamics; the CLI recognizes exactly `[gcmc]`
+// and `[pore]` at the top level.
 //
 // Config validation happens entirely up front — a malformed config fails
 // immediately with a message naming the offending key (and, where toml++
@@ -28,11 +24,8 @@
 // reproduced from its artifacts alone.
 //
 // Exit codes: 0 = success. 1 = configuration/validation error (including
-// an unrecognized command). 2 = `aleator validate` was pointed at a
-// syntactically valid `[pore]`/`[md]` config, for which there is no engine
-// in this build yet — distinguished from a config error so a calling
-// script can tell "your TOML is broken" from "your TOML is fine, this
-// feature doesn't exist yet" apart.
+// an unrecognized command or a config with neither `[gcmc]` nor `[pore]`
+// at the top level).
 
 #include <algorithm>
 #include <array>
@@ -74,7 +67,6 @@ namespace {
 
 constexpr int kExitSuccess = EXIT_SUCCESS;
 constexpr int kExitConfigError = 1;
-constexpr int kExitNotImplemented = 2;
 
 void printUsage() {
     std::cout
@@ -89,10 +81,7 @@ void printUsage() {
         << "  aleator bench [--json]                          Run a quick built-in benchmark\n"
         << "\n"
         << "Only engines that are actually implemented get a subcommand: GCMC and\n"
-        << "pore-geometry analysis. Molecular dynamics is not implemented yet, so there is\n"
-        << "no `md run` -- see CLAUDE.md section 0 for status. `aleator validate` still\n"
-        << "recognizes an [md] config file (the schema exists) and will say so plainly,\n"
-        << "distinct from a malformed config.\n"
+        << "pore-geometry analysis. Molecular dynamics is not a project goal.\n"
         << "\n"
         << "Flags (gcmc run, pore analyze):\n"
         << "  --dry-run   Validate the config and structure file, print the fully resolved\n"
@@ -601,8 +590,7 @@ int runGcmcCommand(const std::filesystem::path& configPath, bool dryRun, bool js
 // ---------------------------------------------------------------- pore ---
 
 // engines/geometry_analysis is now implemented (CLAUDE.md section 0), so
-// `pore analyze` is a real subcommand -- `md run` still is not
-// (engines/dynamics remains NotImplemented) and stays absent from --help.
+// `pore analyze` is a real subcommand.
 
 /// Per-atom radii for `structure`, using this codebase's own Zeo++-sourced
 /// default radius table (pore_analysis.hpp's
@@ -724,16 +712,9 @@ int runPoreCommand(const std::filesystem::path& configPath, bool dryRun, bool js
 // ------------------------------------------------------------ validate ---
 
 // `gcmc run` and `pore analyze` are real, executable subcommands
-// (engines/geometry_analysis is now implemented); `md run` still is not
-// (engines/dynamics remains NotImplemented). `validate` still recognizes
-// an `[md]` config file -- its schema is real (io/config.hpp) and checking
-// it is honest, useful groundwork, distinct from claiming the engine
-// itself runs. Real schema validation happens first (so a genuinely
-// malformed `[md]` config still gets a precise key/line error, same as
-// `[gcmc]`/`[pore]`); only after that succeeds does this say plainly that
-// there is no engine for it yet -- never silently "valid" in a way that
-// could be mistaken for "runnable" (invariant #7: no stub presented as
-// complete).
+// (engines/geometry_analysis is now implemented). Molecular dynamics has
+// been cancelled as a project goal (CLAUDE.md section 0), so there is no
+// `[md]` schema left to recognize here.
 int runValidateCommand(const std::filesystem::path& configPath) {
     const auto kind = aleator::io::detectConfigKind(configPath);
     switch (kind) {
@@ -753,16 +734,9 @@ int runValidateCommand(const std::filesystem::path& configPath) {
                       << structure.particles.size() << " framework atoms)\n";
             return kExitSuccess;
         }
-        case aleator::io::ConfigKind::Md: {
-            const auto cfg = aleator::io::loadMdConfig(configPath);
-            std::cout << configPath.string() << ": schema-valid [md] config (\"" << cfg.run.name
-                      << "\"), but molecular dynamics is not implemented in this build yet -- there is "
-                         "no `aleator md run`\n";
-            return kExitNotImplemented;
-        }
         case aleator::io::ConfigKind::Unknown:
             std::cerr << "error: " << configPath.string()
-                      << " must have exactly one of [gcmc], [pore], or [md] at the top level\n";
+                      << " must have exactly one of [gcmc] or [pore] at the top level\n";
             return kExitConfigError;
     }
     return kExitConfigError;

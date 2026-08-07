@@ -334,46 +334,15 @@ PoreRunConfig loadPoreConfig(const std::filesystem::path& file) {
     return result;
 }
 
-MdRunConfig loadMdConfig(const std::filesystem::path& file) {
-    const toml::table root = parseFile(file);
-    const std::string filePath = file.string();
-
-    MdRunConfig result;
-    result.run = parseRunTable(root, file);
-
-    const toml::table& md = requireTable(root, "md", filePath, "md");
-    const std::string structurePath =
-        requireValue<std::string>(md, "structure_file", filePath, "md.structure_file", "a string");
-    result.md.structureFile = resolveRelativeTo(file, structurePath);
-
-    result.md.timestepPicoseconds =
-        requireValue<double>(md, "timestep_ps", filePath, "md.timestep_ps", "a number");
-    requirePositive(result.md.timestepPicoseconds, filePath, "md.timestep_ps", md, "timestep_ps");
-
-    const auto numSteps =
-        requireValue<std::int64_t>(md, "num_steps", filePath, "md.num_steps", "an integer");
-    if (numSteps <= 0) {
-        const auto [line, column] = locationOf(md["num_steps"].node(), md);
-        throw ConfigError(filePath, "md.num_steps", "must be positive", line, column);
-    }
-    result.md.numSteps = static_cast<std::size_t>(numSteps);
-
-    return result;
-}
-
 ConfigKind detectConfigKind(const std::filesystem::path& file) {
     const toml::table root = parseFile(file);
     const bool hasGcmc = root["gcmc"].as_table() != nullptr;
     const bool hasPore = root["pore"].as_table() != nullptr;
-    const bool hasMd = root["md"].as_table() != nullptr;
-    if (hasGcmc && !hasPore && !hasMd) {
+    if (hasGcmc && !hasPore) {
         return ConfigKind::Gcmc;
     }
-    if (hasPore && !hasGcmc && !hasMd) {
+    if (hasPore && !hasGcmc) {
         return ConfigKind::Pore;
-    }
-    if (hasMd && !hasGcmc && !hasPore) {
-        return ConfigKind::Md;
     }
     return ConfigKind::Unknown;
 }

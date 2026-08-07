@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(aleator
     VERSION 0.1.0
-    DESCRIPTION "Monte Carlo, molecular dynamics, and porous-material geometry analysis on a shared periodic-system core"
+    DESCRIPTION "Monte Carlo and porous-material geometry analysis on a shared periodic-system core"
     HOMEPAGE_URL "https://github.com/Defalt-Meh/aleator"
     LANGUAGES CXX
 )

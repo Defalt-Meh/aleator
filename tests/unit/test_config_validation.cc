@@ -176,29 +176,13 @@ TEST_CASE("loadPoreConfig rejects a missing framework_cif", "[unit][io]") {
     std::filesystem::remove(path);
 }
 
-TEST_CASE("loadMdConfig rejects a non-positive timestep", "[unit][io]") {
-    const auto path = writeTemp(
-        "aleator_cfg_md_bad_dt.toml",
-        "[run]\nname = \"test\"\n\n[md]\nstructure_file = \"x.cif\"\ntimestep_ps = 0.0\n"
-        "num_steps = 10\n");
-    try {
-        (void)aleator::io::loadMdConfig(path);
-        FAIL("expected ConfigError");
-    } catch (const aleator::io::ConfigError& err) {
-        const std::string what = err.what();
-        REQUIRE(what.find("md.timestep_ps") != std::string::npos);
-        REQUIRE(what.find("must be positive") != std::string::npos);
-    }
-    std::filesystem::remove(path);
-}
-
 TEST_CASE("A syntactically invalid TOML file is rejected with a line number", "[unit][io]") {
     const auto path = writeTemp("aleator_cfg_syntax_error.toml", "[run\nname = \"test\"\n");
     REQUIRE_THROWS_AS(aleator::io::loadRunConfig(path), aleator::io::ConfigError);
     std::filesystem::remove(path);
 }
 
-TEST_CASE("detectConfigKind identifies gcmc/pore/md and rejects ambiguous or empty configs",
+TEST_CASE("detectConfigKind identifies gcmc/pore and rejects ambiguous or empty configs",
           "[unit][io]") {
     const auto gcmcPath =
         writeTemp("aleator_cfg_kind_gcmc.toml", "[run]\nname=\"t\"\n\n[gcmc]\nx=1\n");

@@ -5,7 +5,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "aleator"
 version = "0.1.0"
-description = "Monte Carlo, molecular dynamics, and porous-material geometry analysis on a shared periodic-system core. Scaffolding only — no physics is implemented yet."
+description = "Monte Carlo and porous-material geometry analysis on a shared periodic-system core. Scaffolding only — no physics is implemented yet."
 readme = "README.md"
 license = { text = "BSD-3-Clause" }
 requires-python = ">=3.9"

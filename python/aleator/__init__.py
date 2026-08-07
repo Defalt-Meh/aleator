@@ -1,5 +1,5 @@
-"""Aleator: Monte Carlo, molecular dynamics, and porous-material geometry
-analysis on a shared periodic-system core.
+"""Aleator: Monte Carlo and porous-material geometry analysis on a shared
+periodic-system core.
 
 This build exposes scaffolding only — no physics is implemented yet. See the
 project README for current status.

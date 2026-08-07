@@ -1,16 +1,22 @@
 # Aleator
-## A periodic-system core for Monte Carlo, molecular dynamics, and porous-material geometry analysis 
+## A periodic-system core for Monte Carlo and porous-material geometry analysis
 
-A molecular simulation engine in modern C++23 covering three domains that are usually
-separate tools — grand-canonical and canonical Monte Carlo, molecular dynamics, and
-porous-material pore-geometry analysis — built on one shared, high-performance periodic
-system core. Distributed as a native command-line binary and as a pip-installable Python
-package.
+A molecular simulation engine in modern C++23 covering two domains — grand-canonical and
+canonical Monte Carlo, and porous-material pore-geometry analysis — built on one shared,
+high-performance periodic system core. Distributed as a native command-line binary and as
+a pip-installable Python package.
 
-Aleator targets the same problem space as RASPA, LAMMPS, and Zeo++, with a single design
-bet: if the periodic-cell geometry, neighbor-list, and force-field core underneath all
-three domains is fast and genuinely correct, each simulation engine on top of it becomes
+Aleator targets the same problem space as RASPA and Zeo++, with a single design
+bet: if the periodic-cell geometry, neighbor-list, and force-field core underneath both
+domains is fast and genuinely correct, each simulation engine on top of it becomes
 substantially simpler to build and to trust.
+
+Molecular dynamics was scoped out deliberately, not merely deferred: the narrow version
+that would matter here (NVE/NVT/NPT for rigid frameworks with adsorbates) is months of
+work competing with a mature, 100k-line incumbent (LAMMPS), and doesn't serve this
+project's actual screening-and-publication goals. `engines/dynamics` does not exist in
+this repository. Structure/trajectory export for interoperability with LAMMPS (not
+replacement of it) remains a possible future direction, not a current feature.
 
 ## Why this project exists
 
@@ -417,18 +423,9 @@ in `tests/validation/data/pore_geometry/PROVENANCE.md` and
 These have interfaces defined (so the rest of the codebase can be written against them)
 but calling them throws `NotImplemented` rather than doing anything:
 
-- **Molecular dynamics** (`engines/dynamics`): velocity-Verlet integration, thermostats,
-  barostats. Will be validated on NVE energy drift and equipartition before being trusted.
 - **Structure file writers** (`io`): PDB and LAMMPS `data` output. Reading (CIF) works;
   writing does not yet.
 - **Energy-biased Monte Carlo move variants** and multi-species GCMC mixtures.
-- **`[md]` config schema exists (`io/config.hpp`) with no CLI subcommand to run it**:
-  `engines/dynamics` is itself unimplemented (see above), and CLAUDE.md's CLI milestone
-  is explicit that a subcommand which just prints `NotImplemented` when run is worse than
-  not having it — so there is no `aleator md run`. `aleator validate` still
-  schema-validates `[md]` config files (real, useful groundwork ahead of that engine
-  existing) and says plainly that there's no engine for it yet, distinct from a malformed
-  config.
 
 ## Architecture
 
@@ -442,7 +439,6 @@ src/
     parameters/        # force-field parameter file loading
   engines/
     monte_carlo/       # GCMC moves, acceptance criteria, Peng-Robinson EOS
-    dynamics/          # MD integrators (declared only)
     geometry_analysis/ # pore geometry: Voro++-based periodic radical Voronoi network,
                         # percolation graph, LCD/PLD/ASA/AV
   io/            # CIF reading, TOML run configuration
@@ -546,15 +542,12 @@ aleator validate <config.toml>                          # validate a config, the
 aleator bench [--json]                                  # a quick built-in timing check
 ```
 
-GCMC and pore-geometry analysis are the implemented engines right now (see the status
-table above), so those are the runnable subcommands — there is no `aleator md run`
-(`engines/dynamics` is still `NotImplemented`). A subcommand that just prints "not
-implemented" when run is worse than not having it: it advertises capability the tool
-doesn't actually have. The `[md]` config *schema* still exists (real groundwork for when
-that engine lands), and `aleator validate` still recognizes it — it will schema-validate
-the file and then say plainly that there's no engine for it yet (exit code `2`, distinct
-from a malformed config's `1`), never silently call it "valid" in a way that could be
-mistaken for "runnable."
+GCMC and pore-geometry analysis are the two implemented engines (see the status table
+above), so those are the only runnable subcommands. Molecular dynamics has been cancelled
+as a project goal outright, not deferred (see the introduction above) — there is no
+`aleator md run`, no `[md]` config schema, and `aleator validate` on a `[md]` table is
+rejected the same as any other unrecognized top-level section (exit code `1`), not
+treated as a distinct "schema-valid, no engine" case.
 
 `--dry-run` runs every check a real run would (parsing the config, opening and parsing
 the structure file, checking that force-field parameters cover every element actually

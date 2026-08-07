@@ -155,26 +155,11 @@ struct PoreRunConfig {
 
 [[nodiscard]] PoreRunConfig loadPoreConfig(const std::filesystem::path& file);
 
-/// Molecular dynamics run parameters, from `[md]`. The integrator itself is
-/// not implemented yet (engines/dynamics) — same rationale as PoreConfig.
-struct MdConfig {
-    std::filesystem::path structureFile;
-    double timestepPicoseconds;
-    std::size_t numSteps;
-};
-
-struct MdRunConfig {
-    RunConfig run;
-    MdConfig md;
-};
-
-[[nodiscard]] MdRunConfig loadMdConfig(const std::filesystem::path& file);
-
-/// Which of `[gcmc]` / `[pore]` / `[md]` a config file's top level
-/// contains — used by `aleator validate` to dispatch to the right loader
-/// (and its full validation) without the caller having to already know
-/// what kind of config it's pointing at.
-enum class ConfigKind { Gcmc, Pore, Md, Unknown };
+/// Which of `[gcmc]` / `[pore]` a config file's top level contains — used by
+/// `aleator validate` to dispatch to the right loader (and its full
+/// validation) without the caller having to already know what kind of config
+/// it's pointing at.
+enum class ConfigKind { Gcmc, Pore, Unknown };
 
 [[nodiscard]] ConfigKind detectConfigKind(const std::filesystem::path& file);
 

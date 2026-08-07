@@ -20,7 +20,7 @@ public:
     /// missing key, pass the *enclosing table's* position instead — the
     /// closest honest approximation toml++ can give, and still far more
     /// useful than no location at all — and word `problem` accordingly
-    /// (callers do; see loadGcmcConfig/loadPoreConfig/loadMdConfig).
+    /// (callers do; see loadGcmcConfig/loadPoreConfig).
     ConfigError(const std::string& filePath, const std::string& keyPath,
                 const std::string& problem, std::uint32_t line, std::uint32_t column)
         : std::runtime_error(filePath + ":" + std::to_string(line) + ":" + std::to_string(column) +
